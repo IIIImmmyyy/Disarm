@@ -270,5 +270,29 @@ internal static class Arm64Aliases
                 return;
             }
         }
+        
+        // BFM to BFI alias conversion
+        if (instruction.Mnemonic == Arm64Mnemonic.BFM && instruction.Op2Kind == Arm64OperandKind.Immediate && instruction.Op3Kind == Arm64OperandKind.Immediate)
+        {
+            var immr = instruction.Op2Imm;
+            var imms = instruction.Op3Imm;
+            var is64Bit = instruction.Op0Reg >= Arm64Register.X0 && instruction.Op0Reg <= Arm64Register.X31;
+            var regWidth = is64Bit ? 64 : 32;
+            
+            // Check if this matches BFI pattern: BFM Rd, Rn, #(-lsb MOD width), #(width-1)
+            // where lsb is the insertion position and width is the field width
+            var lsb = (regWidth - immr) % regWidth;
+            var fieldWidth = imms + 1;
+            
+            if (lsb + fieldWidth <= regWidth && immr == (regWidth - lsb) % regWidth && imms == fieldWidth - 1)
+            {
+                // Convert to BFI
+                instruction.Mnemonic = Arm64Mnemonic.BFI;
+                instruction.Op2Imm = lsb;
+                instruction.Op3Imm = fieldWidth;
+                instruction.MnemonicCategory = Arm64MnemonicCategory.Move;
+                return;
+            }
+        }
     }
 }
