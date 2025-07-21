@@ -279,17 +279,35 @@ internal static class Arm64Aliases
             var is64Bit = instruction.Op0Reg >= Arm64Register.X0 && instruction.Op0Reg <= Arm64Register.X31;
             var regWidth = is64Bit ? 64 : 32;
             
+            // Check if this matches BFXIL pattern: BFM Rd, Rn, #lsb, #(lsb+width-1)
+            // where lsb is the extraction start position and width is the field width
+            if (immr <= imms)
+            {
+                var lsb = immr;
+                var fieldWidth = imms - immr + 1;
+                
+                if (lsb + fieldWidth <= regWidth)
+                {
+                    // Convert to BFXIL
+                    instruction.Mnemonic = Arm64Mnemonic.BFXIL;
+                    instruction.Op2Imm = lsb;
+                    instruction.Op3Imm = fieldWidth;
+                    instruction.MnemonicCategory = Arm64MnemonicCategory.Move;
+                    return;
+                }
+            }
+            
             // Check if this matches BFI pattern: BFM Rd, Rn, #(-lsb MOD width), #(width-1)
             // where lsb is the insertion position and width is the field width
-            var lsb = (regWidth - immr) % regWidth;
-            var fieldWidth = imms + 1;
+            var bfiLsb = (regWidth - immr) % regWidth;
+            var bfiFieldWidth = imms + 1;
             
-            if (lsb + fieldWidth <= regWidth && immr == (regWidth - lsb) % regWidth && imms == fieldWidth - 1)
+            if (bfiLsb + bfiFieldWidth <= regWidth && immr == (regWidth - bfiLsb) % regWidth && imms == bfiFieldWidth - 1)
             {
                 // Convert to BFI
                 instruction.Mnemonic = Arm64Mnemonic.BFI;
-                instruction.Op2Imm = lsb;
-                instruction.Op3Imm = fieldWidth;
+                instruction.Op2Imm = bfiLsb;
+                instruction.Op3Imm = bfiFieldWidth;
                 instruction.MnemonicCategory = Arm64MnemonicCategory.Move;
                 return;
             }
