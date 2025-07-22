@@ -78,7 +78,20 @@ internal static class Arm64Aliases
             
             return;
         }
+        if (instruction is { Mnemonic: Arm64Mnemonic.SMADDL, Op3Reg: Arm64Register.X31 })
+        {
+            //SMADDL Xd, Wn, Wm, XZR => SMULL Xd, Wn, Wm
+            //because SMADDL is (Xd = Wn * Wm + Xa) so when Xa = XZR => Xd = Wn * Wm
+            
+            //Simply clear the last operand and change mnemonic
+            instruction.Mnemonic = Arm64Mnemonic.SMULL;
+            instruction.Op3Kind = Arm64OperandKind.None;
+            instruction.Op3Reg = Arm64Register.INVALID;
+            
+            //Category doesn't change (math => math)
 
+            return;
+        }
         if (instruction.Mnemonic == Arm64Mnemonic.MADD && instruction.Op3Reg is Arm64Register.X31 or Arm64Register.W31)
         {
             //MADD Rd, Rn, Rm, ZR => MUL Rd, Rn, Rm

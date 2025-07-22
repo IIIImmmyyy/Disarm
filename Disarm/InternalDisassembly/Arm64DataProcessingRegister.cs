@@ -566,10 +566,15 @@ internal static class Arm64DataProcessingRegister
             _ => throw new Arm64UndefinedInstructionException($"DataProcessing3Source: unallocated operand combination: op31 = {op31} o0 = {o0} sf = {(is64Bit ? 1 : 0)}")
         };
         
-        var baseReg = is64Bit ? Arm64Register.X0 : Arm64Register.W0;
+        // For SMADDL, SMSUBL, UMADDL, UMSUBL: destination and accumulator are 64-bit, sources are 32-bit
+        var isLongMultiply = mnemonic is Arm64Mnemonic.SMADDL or Arm64Mnemonic.SMSUBL or Arm64Mnemonic.UMADDL or Arm64Mnemonic.UMSUBL;
         
-        var regM = baseReg + rm;
-        var regN = baseReg + rn;
+        var baseReg = is64Bit ? Arm64Register.X0 : Arm64Register.W0;
+        var sourceBaseReg = (isLongMultiply && is64Bit) ? Arm64Register.W0 : baseReg;
+        
+        var regM = sourceBaseReg + rm;
+        var regN = sourceBaseReg + rn;
+
         var regD = baseReg + rd;
         var regA = baseReg + ra;
 
