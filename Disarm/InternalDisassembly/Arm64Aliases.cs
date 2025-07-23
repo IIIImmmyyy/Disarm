@@ -370,5 +370,34 @@ internal static class Arm64Aliases
                 return;
             }
         }
+        
+        // Variable shift instructions to their more readable aliases
+        // LSLV Rd, Rn, Rm => LSL Rd, Rn, Rm
+        if (instruction.Mnemonic == Arm64Mnemonic.LSLV)
+        {
+            instruction.Mnemonic = Arm64Mnemonic.LSL;
+            return;
+        }
+        
+        // LSRV Rd, Rn, Rm => LSR Rd, Rn, Rm  
+        if (instruction.Mnemonic == Arm64Mnemonic.LSRV)
+        {
+            instruction.Mnemonic = Arm64Mnemonic.LSR;
+            return;
+        }
+        
+        // ASRV Rd, Rn, Rm => ASR Rd, Rn, Rm
+        if (instruction.Mnemonic == Arm64Mnemonic.ASRV)
+        {
+            instruction.Mnemonic = Arm64Mnemonic.ASR;
+            return;
+        }
+        
+        // RORV Rd, Rn, Rm => ROR Rd, Rn, Rm
+        if (instruction.Mnemonic == Arm64Mnemonic.RORV)
+        {
+            instruction.Mnemonic = Arm64Mnemonic.ROR;
+            return;
+        }
     }
 }
