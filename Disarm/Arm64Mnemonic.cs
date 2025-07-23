@@ -140,6 +140,7 @@ public enum Arm64Mnemonic
     ERETAB,
     ESB,
     EXTR,
+    EXT,  // Advanced SIMD extract
     FABD,
     FABS,
     FACGE,

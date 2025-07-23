@@ -723,10 +723,36 @@ internal static class Arm64NonScalarAdvancedSimd
 
     private static Arm64Instruction AdvancedSimdExtract(uint instruction)
     {
+        var q = instruction.TestBit(30); // Bit 30 - 0 for 64-bit, 1 for 128-bit
+        var rm = (int)(instruction >> 16) & 0b1111; // Bits 16-19
+        var imm4 = (instruction >> 11) & 0b1111;   // Bits 11-14 - extraction index
+        var rn = (int)(instruction >> 5) & 0b11111; // Bits 5-9
+        var rd = (int)instruction & 0b11111;       // Bits 0-4
+        
+        // EXT only operates on byte elements
+        var arrangement = q ? Arm64ArrangementSpecifier.SixteenB : Arm64ArrangementSpecifier.EightB;
+        
+        // For 64-bit operation (q=0), imm4 must be in range 0-7
+        // For 128-bit operation (q=1), imm4 must be in range 0-15
+        var maxIndex = q ? 15 : 7;
+        if (imm4 > maxIndex)
+            throw new Arm64UndefinedInstructionException($"AdvancedSimdExtract: imm4 {imm4} exceeds maximum {maxIndex} for {(q ? "128" : "64")}-bit operation");
+        
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.SimdRegisterToRegister, 
+            Mnemonic = Arm64Mnemonic.EXT,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = Arm64Register.V0 + rd,
+            Op0Arrangement = arrangement,
+            Op1Kind = Arm64OperandKind.Register,
+            Op1Reg = Arm64Register.V0 + rn,
+            Op1Arrangement = arrangement,
+            Op2Kind = Arm64OperandKind.Register,
+            Op2Reg = Arm64Register.V0 + rm,
+            Op2Arrangement = arrangement,
+            Op3Kind = Arm64OperandKind.Immediate,
+            Op3Imm = imm4,
+            MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath,
         };
     }
 
@@ -846,7 +872,7 @@ internal static class Arm64NonScalarAdvancedSimd
         {
             Arm64Mnemonic.CMGT or Arm64Mnemonic.CMEQ or Arm64Mnemonic.CMLT or 
             Arm64Mnemonic.CMGE or Arm64Mnemonic.CMLE or 
-            Arm64Mnemonic.FCMGT or Arm64Mnemonic.FCMGE => Arm64MnemonicCategory.SimdComparison,
+            Arm64Mnemonic.FCMEQ or Arm64Mnemonic.FCMGE or Arm64Mnemonic.FCMGT => Arm64MnemonicCategory.SimdComparison,
             _ => Arm64MnemonicCategory.SimdVectorMath,
         };
 
