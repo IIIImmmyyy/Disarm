@@ -78,20 +78,7 @@ internal static class Arm64Aliases
             
             return;
         }
-        if (instruction is { Mnemonic: Arm64Mnemonic.SMADDL, Op3Reg: Arm64Register.X31 })
-        {
-            //SMADDL Xd, Wn, Wm, XZR => SMULL Xd, Wn, Wm
-            //because SMADDL is (Xd = Wn * Wm + Xa) so when Xa = XZR => Xd = Wn * Wm
-            
-            //Simply clear the last operand and change mnemonic
-            instruction.Mnemonic = Arm64Mnemonic.SMULL;
-            instruction.Op3Kind = Arm64OperandKind.None;
-            instruction.Op3Reg = Arm64Register.INVALID;
-            
-            //Category doesn't change (math => math)
-
-            return;
-        }
+        
         if (instruction.Mnemonic == Arm64Mnemonic.MADD && instruction.Op3Reg is Arm64Register.X31 or Arm64Register.W31)
         {
             //MADD Rd, Rn, Rm, ZR => MUL Rd, Rn, Rm
@@ -104,6 +91,64 @@ internal static class Arm64Aliases
             
             //Category doesn't change (math => math)
 
+            return;
+        }
+
+        // SMADDL Rd, Rn, Rm, X31 => SMULL Rd, Wn, Wm
+        // According to ARM64 specification, when the accumulator is X31 (zero register),
+        // SMADDL should be aliased to SMULL with 32-bit source operands
+        if (instruction.Mnemonic == Arm64Mnemonic.SMADDL && instruction.Op3Reg == Arm64Register.X31)
+        {
+            instruction.Mnemonic = Arm64Mnemonic.SMULL;
+            
+            // Convert source registers from X to W (e.g., X8 -> W8, X25 -> W25)
+            // The destination stays as X register
+            var regN = instruction.Op1Reg;
+            var regM = instruction.Op2Reg;
+            
+            if (regN >= Arm64Register.X0 && regN <= Arm64Register.X30)
+            {
+                instruction.Op1Reg = Arm64Register.W0 + (regN - Arm64Register.X0);
+            }
+            
+            if (regM >= Arm64Register.X0 && regM <= Arm64Register.X30)
+            {
+                instruction.Op2Reg = Arm64Register.W0 + (regM - Arm64Register.X0);
+            }
+            
+            // Clear the accumulator operand
+            instruction.Op3Kind = Arm64OperandKind.None;
+            instruction.Op3Reg = Arm64Register.INVALID;
+            
+            return;
+        }
+
+        // UMADDL Rd, Rn, Rm, X31 => UMULL Rd, Wn, Wm
+        // According to ARM64 specification, when the accumulator is X31 (zero register),
+        // UMADDL should be aliased to UMULL with 32-bit source operands
+        if (instruction.Mnemonic == Arm64Mnemonic.UMADDL && instruction.Op3Reg == Arm64Register.X31)
+        {
+            instruction.Mnemonic = Arm64Mnemonic.UMULL;
+            
+            // Convert source registers from X to W (e.g., X26 -> W26, X9 -> W9)
+            // The destination stays as X register
+            var regN = instruction.Op1Reg;
+            var regM = instruction.Op2Reg;
+            
+            if (regN is >= Arm64Register.X0 and <= Arm64Register.X30)
+            {
+                instruction.Op1Reg = Arm64Register.W0 + (regN - Arm64Register.X0);
+            }
+            
+            if (regM is >= Arm64Register.X0 and <= Arm64Register.X30)
+            {
+                instruction.Op2Reg = Arm64Register.W0 + (regM - Arm64Register.X0);
+            }
+            
+            // Clear the accumulator operand
+            instruction.Op3Kind = Arm64OperandKind.None;
+            instruction.Op3Reg = Arm64Register.INVALID;
+            
             return;
         }
 
