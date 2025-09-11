@@ -52,12 +52,16 @@ internal static class Arm64Branches
 
         var mnemonic = isNegated ? Arm64Mnemonic.TBNZ : Arm64Mnemonic.TBZ;
 
+        // 计算要测试的位号：b5位决定是32位还是64位，b40是位号的高5位
         var bitToTest = b40;
         if (b5)
-            bitToTest &= 1 << 5;
+            bitToTest |= 32; // 对于64位寄存器，b5=1时位号需要加上32
 
         var jumpTo = Arm64CommonUtils.CorrectSignBit(imm14, 14) * 4;
-        var regT = Arm64Register.X0 + rt;
+        
+        // 根据b5位决定使用32位还是64位寄存器
+        var baseReg = b5 ? Arm64Register.X0 : Arm64Register.W0;
+        var regT = baseReg + rt;
 
         return new()
         {
