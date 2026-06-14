@@ -33,6 +33,21 @@ public class LoadStoreTests : BaseDisarmTest
     }
 
     [Fact]
+    public void LoadStoreRegFromRegOffsetOmitsNoOpLsl()
+    {
+        var instruction = DisassembleAndCheckMnemonic(0xBC686A6AU, Arm64Mnemonic.LDR);
+
+        Assert.Equal(Arm64Register.S10, instruction.Op0Reg);
+        Assert.Equal(Arm64OperandKind.Memory, instruction.Op1Kind);
+        Assert.Equal(Arm64Register.X19, instruction.MemBase);
+        Assert.Equal(Arm64Register.X8, instruction.MemAddendReg);
+        Assert.Equal(Arm64ShiftType.NONE, instruction.MemShiftType);
+        Assert.Equal(0, instruction.MemExtendOrShiftAmount);
+
+        Assert.Equal("0x00000000 LDR S10, [X19, X8]", instruction.ToString());
+    }
+
+    [Fact]
     public void LoadRegFromMemImmPostIndex()
     {
         var instruction = DisassembleAndCheckMnemonic(0xF8420688, Arm64Mnemonic.LDR);

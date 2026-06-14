@@ -930,7 +930,7 @@ internal static class Arm64LoadsStores
             MemAddendReg = secondRegBase + rm,
             MemIndexMode = Arm64MemoryIndexMode.Offset,
             MemExtendType = isShiftedRegister ? Arm64ExtendType.NONE : extendKind,
-            MemShiftType = isShiftedRegister ? Arm64ShiftType.LSL : Arm64ShiftType.NONE,
+            MemShiftType = isShiftedRegister && shiftAmount != 0 ? Arm64ShiftType.LSL : Arm64ShiftType.NONE,
             MemExtendOrShiftAmount = shiftAmount,
             MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
         };
