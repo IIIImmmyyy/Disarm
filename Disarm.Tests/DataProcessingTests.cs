@@ -31,6 +31,20 @@ public class DataProcessingTests : BaseDisarmTest
     }
 
     [Fact]
+    public void MoveWideMovnIsDecodedAsMovAlias()
+    {
+        var xMovn = DisassembleAndCheckMnemonic(0x928003F8, Arm64Mnemonic.MOV);
+        Assert.Equal(Arm64Register.X24, xMovn.Op0Reg);
+        Assert.Equal(Arm64OperandKind.Immediate, xMovn.Op1Kind);
+        Assert.Equal(-32, xMovn.Op1Imm);
+
+        var wMovn = DisassembleAndCheckMnemonic(0x12800000, Arm64Mnemonic.MOV);
+        Assert.Equal(Arm64Register.W0, wMovn.Op0Reg);
+        Assert.Equal(Arm64OperandKind.Immediate, wMovn.Op1Kind);
+        Assert.Equal(0xFFFFFFFFL, wMovn.Op1Imm);
+    }
+
+    [Fact]
     public void DataProcessing2Source() 
         => DisassembleAndCheckMnemonic(0x1AC80D2AU, Arm64Mnemonic.SDIV);
 
