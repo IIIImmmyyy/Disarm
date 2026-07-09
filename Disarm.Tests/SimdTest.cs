@@ -227,6 +227,13 @@ public class SimdTest : BaseDisarmTest
     }
 
     [Fact]
+    public void TestAdvancedSimdTwoRegisterMiscFneg2S()
+    {
+        var inst = DisassembleAndCheckMnemonic(0x2EA0F8A7, Arm64Mnemonic.FNEG);
+        Assert.Equal("0x00000000 FNEG V7.2S, V5.2S", inst.ToString());
+    }
+
+    [Fact]
     public void TestScalarAdvancedSimdShiftByImmediate()
     {
         Arm64Instruction inst;

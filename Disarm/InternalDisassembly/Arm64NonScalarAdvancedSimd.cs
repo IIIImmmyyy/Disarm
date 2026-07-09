@@ -809,6 +809,7 @@ internal static class Arm64NonScalarAdvancedSimd
                 0b01001 => Arm64Mnemonic.CMLE,
                 0b01010 => Arm64Mnemonic.FCMGT,
                 0b01011 => Arm64Mnemonic.FCMGE,
+                0b01111 when size == 0b10 => Arm64Mnemonic.FNEG,
                 0b10010 => Arm64Mnemonic.SQXTUN,
                 0b10100 => Arm64Mnemonic.UQXTN,
                 0b10110 when size != 0b11 => Arm64Mnemonic.FCVTXN,
