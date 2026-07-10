@@ -56,9 +56,8 @@ internal static class Arm64System
     public static Arm64Instruction RegisterMove(uint instruction)
     {
         var l = (instruction >> 21) & 1;
-        var op0 = ((instruction >> 19) & 1) + 2;
-        var systemregLow = (instruction >> 5) & (1 << 18); // Bits 5-18
-        var systemreg = systemregLow | (op0 << 14);
+        // The architectural system-register encoding op0:op1:CRn:CRm:op2 is stored contiguously in bits 20-5.
+        var systemreg = (instruction >> 5) & 0xFFFF;
         var rt = (int)(instruction & 0b11111); // Bits 0-4
         
         return l == 0 ? new() // MSR (<systemreg>|S<op0>_<op1>_<Cn>_<Cm>_<op2>), <Xt>
