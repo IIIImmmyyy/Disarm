@@ -15,6 +15,18 @@ public class SimdTest : BaseDisarmTest
     public void TestScvtf() 
         => DisassembleAndCheckMnemonic(0x1E2202A1U, Arm64Mnemonic.SCVTF);
 
+    [Theory]
+    [InlineData(0x0E21D800U, Arm64ArrangementSpecifier.TwoS)]
+    [InlineData(0x4E21D800U, Arm64ArrangementSpecifier.FourS)]
+    [InlineData(0x4E61D800U, Arm64ArrangementSpecifier.TwoD)]
+    public void TestVectorScvtfArrangement(uint encoding, Arm64ArrangementSpecifier expectedArrangement)
+    {
+        var result = DisassembleAndCheckMnemonic(encoding, Arm64Mnemonic.SCVTF);
+
+        Assert.Equal(expectedArrangement, result.Op0Arrangement);
+        Assert.Equal(expectedArrangement, result.Op1Arrangement);
+    }
+
     [Fact]
     public void Test2SourceFp() 
         => DisassembleAndCheckMnemonic(0x1E201820U, Arm64Mnemonic.FDIV);

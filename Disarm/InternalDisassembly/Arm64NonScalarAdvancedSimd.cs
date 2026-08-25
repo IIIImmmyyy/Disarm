@@ -855,19 +855,36 @@ internal static class Arm64NonScalarAdvancedSimd
             };
         }
 
-        // Determine arrangement based on size and q
-        Arm64ArrangementSpecifier arrangement = size switch
+        // Integer-to-floating-point conversions encode the floating-point element
+        // size differently from the generic integer two-register operations in
+        // this group. Decode their complete architectural vector shapes here.
+        Arm64ArrangementSpecifier arrangement;
+        if (mnemonic is Arm64Mnemonic.SCVTF or Arm64Mnemonic.UCVTF)
         {
-            0b00 when q => Arm64ArrangementSpecifier.SixteenB,
-            0b00 => Arm64ArrangementSpecifier.EightB,
-            0b01 when q => Arm64ArrangementSpecifier.EightH,
-            0b01 => Arm64ArrangementSpecifier.FourH,
-            0b10 when q => Arm64ArrangementSpecifier.FourS,
-            0b10 => Arm64ArrangementSpecifier.TwoS,
-            0b11 when q => Arm64ArrangementSpecifier.TwoD,
-            0b11 => Arm64ArrangementSpecifier.None, // Scalar D register
-            _ => throw new("Impossible size")
-        };
+            arrangement = (size, q) switch
+            {
+                (0b00, false) => Arm64ArrangementSpecifier.TwoS,
+                (0b00, true) => Arm64ArrangementSpecifier.FourS,
+                (0b01, true) => Arm64ArrangementSpecifier.TwoD,
+                _ => throw new Arm64UndefinedInstructionException(
+                    $"AdvancedSimdTwoRegisterMisc: {mnemonic} has invalid size=0x{size:X}, Q={(q ? 1 : 0)}")
+            };
+        }
+        else
+        {
+            arrangement = size switch
+            {
+                0b00 when q => Arm64ArrangementSpecifier.SixteenB,
+                0b00 => Arm64ArrangementSpecifier.EightB,
+                0b01 when q => Arm64ArrangementSpecifier.EightH,
+                0b01 => Arm64ArrangementSpecifier.FourH,
+                0b10 when q => Arm64ArrangementSpecifier.FourS,
+                0b10 => Arm64ArrangementSpecifier.TwoS,
+                0b11 when q => Arm64ArrangementSpecifier.TwoD,
+                0b11 => Arm64ArrangementSpecifier.None, // Scalar D register
+                _ => throw new("Impossible size")
+            };
+        }
 
         var category = mnemonic switch
         {
