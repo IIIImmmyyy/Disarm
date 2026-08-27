@@ -778,7 +778,8 @@ internal static class Arm64ScalarAdvancedSimd
     {
         var uFlag = instruction.TestBit(29); // Bit 29
         var size = (instruction >> 22) & 0b11; //Bits 22-23
-        var rm = (int) (instruction >> 5) & 0b1_1111; //Bits 16-20
+        // Rm 位于 16-20 位；不得与 5-9 位的 Rn 共用位域。
+        var rm = (int) (instruction >> 16) & 0b1_1111; //Bits 16-20
         var opcode = (instruction >> 11) & 0b1_1111; //Bits 11-15
         var rn = (int) (instruction >> 5) & 0b1_1111; //Bits 5-9
         var rd = (int) instruction & 0b1_1111; //Bits 0-4

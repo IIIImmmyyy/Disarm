@@ -362,6 +362,16 @@ public class SimdTest : BaseDisarmTest
         DisassembleAndCheckMnemonic(0x7EE3_E441, Arm64Mnemonic.FCMGT);
         DisassembleAndCheckMnemonic(0x7EE3_EC41, Arm64Mnemonic.FACGT);
     }
+
+    [Fact]
+    public void TestScalarFabdDecodesDistinctRmOperand()
+    {
+        var instruction = DisassembleAndCheckMnemonic(0x7EA1_D501, Arm64Mnemonic.FABD);
+
+        Assert.Equal(Arm64Register.S1, instruction.Op0Reg);
+        Assert.Equal(Arm64Register.S8, instruction.Op1Reg);
+        Assert.Equal(Arm64Register.S1, instruction.Op2Reg);
+    }
     
     [Fact]
     public void TestScalarAdvancedSimdScalarThreeSameFp16()
