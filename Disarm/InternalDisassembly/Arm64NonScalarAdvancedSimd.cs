@@ -840,6 +840,8 @@ internal static class Arm64NonScalarAdvancedSimd
                 0b01001 => Arm64Mnemonic.CMEQ,
                 0b01010 => Arm64Mnemonic.CMLT,
                 0b01011 => Arm64Mnemonic.ABS,
+                // 向量 FABS 的单/双精度形式为 2S、4S、2D；size=11、Q=0 是未分配编码。
+                0b01111 when size == 0b10 || (size == 0b11 && q) => Arm64Mnemonic.FABS,
                 0b10010 => Arm64Mnemonic.XTN,
                 0b10100 => Arm64Mnemonic.SQXTN,
                 0b10110 when size != 0b11 => Arm64Mnemonic.FCVTN,

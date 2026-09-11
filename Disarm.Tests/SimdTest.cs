@@ -31,6 +31,22 @@ public class SimdTest : BaseDisarmTest
     public void Test2SourceFp() 
         => DisassembleAndCheckMnemonic(0x1E201820U, Arm64Mnemonic.FDIV);
 
+    // 快照不能验证 decoder 的寄存器与 lane arrangement，直接固定三种合法宽度。
+    [Theory]
+    [InlineData(0x0EA0F900U, Arm64ArrangementSpecifier.TwoS)]
+    [InlineData(0x4EA0F900U, Arm64ArrangementSpecifier.FourS)]
+    [InlineData(0x4EE0F900U, Arm64ArrangementSpecifier.TwoD)]
+    public void TestVectorFabsArrangement(uint encoding, Arm64ArrangementSpecifier expectedArrangement)
+    {
+        var result = DisassembleAndCheckMnemonic(encoding, Arm64Mnemonic.FABS);
+
+        Assert.Equal(Arm64Register.V0, result.Op0Reg);
+        Assert.Equal(Arm64Register.V8, result.Op1Reg);
+        Assert.Equal(expectedArrangement, result.Op0Arrangement);
+        Assert.Equal(expectedArrangement, result.Op1Arrangement);
+        Assert.Equal(Arm64MnemonicCategory.SimdVectorMath, result.MnemonicCategory);
+    }
+
     [Fact]
     public void TestFp16Scvtf()
     {

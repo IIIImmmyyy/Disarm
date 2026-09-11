@@ -182,7 +182,6 @@ public static class Disassembler
         try
         {
             instruction = DisassembleSingleInstruction(rawInstruction, offset, options.RemapAliases);
-            instruction.Address = virtualAddress + (ulong)offset;
         }
         catch (Arm64UndefinedInstructionException e)
         {
@@ -198,6 +197,9 @@ public static class Disassembler
 
             instruction = new() { Mnemonic = Arm64Mnemonic.INVALID };
         }
+
+        // 继续解码时产生的 INVALID 也保留真实地址，避免上层把解码失败误报为 0x0。
+        instruction.Address = virtualAddress + (ulong)offset;
 
         if (options.ThrowOnUnimplemented && instruction.Mnemonic == Arm64Mnemonic.UNIMPLEMENTED)
         {
