@@ -129,6 +129,33 @@ public struct Arm64Instruction
         ? (ulong) ((long) Address + Op1Imm)
         : throw new("Operand 1 is not a PC-relative immediate");
 
+    /// <summary>
+    /// 将 TST 的两源别名恢复为 ANDS 零目的形式，让 ISIL 消费者复用既有运算和移位处理。
+    /// 返回值副本；其他指令原样返回，不改变解码结果或调用方看到的汇编别名。
+    /// </summary>
+    public Arm64Instruction ExpandTstAlias()
+    {
+        if (Mnemonic != Arm64Mnemonic.TST)
+            return this;
+
+        var expanded = this;
+        expanded.Mnemonic = Arm64Mnemonic.ANDS;
+        expanded.MnemonicCategory = Arm64MnemonicCategory.Math;
+        expanded.Op3Kind = Op2Kind;
+        expanded.Op3Imm = Op2Imm;
+        expanded.Op2Kind = Op1Kind;
+        expanded.Op2Reg = Op1Reg;
+        expanded.Op2Imm = Op1Imm;
+        expanded.Op1Kind = Op0Kind;
+        expanded.Op1Reg = Op0Reg;
+        expanded.Op1Imm = 0;
+        // TST 的源寄存器保留编码的 W/X 位宽；恢复的零目的寄存器必须使用相同视图。
+        expanded.Op0Reg = Op0Reg is >= Arm64Register.W0 and <= Arm64Register.W31
+            ? Arm64Register.W31
+            : Arm64Register.X31;
+        return expanded;
+    }
+
     public override string ToString()
     {
         var sb = new StringBuilder();
@@ -151,6 +178,13 @@ public struct Arm64Instruction
             goto doneops;
         if (!AppendOperand(sb, 1, Op1Kind, Op1Reg, Op1VectorElement, Op1Arrangement, Op1ShiftType, Op1Imm, Op1FpImm, true, MemExtendOrShiftAmount))
             goto doneops;
+        if (Mnemonic == Arm64Mnemonic.TST)
+        {
+            // TST 的 Op2 只保存可逆展开所需的移位量，不是第三个源操作数；显示时省略零移位。
+            if (FinalOpShiftType != Arm64ShiftType.NONE)
+                sb.Append(", ").Append(FinalOpShiftType).Append(" #0x").Append(Op2Imm.ToString("X"));
+            return sb.ToString();
+        }
         if (!AppendOperand(sb, 2, Op2Kind, Op2Reg, Op2VectorElement, Op2Arrangement, Op2ShiftType, Op2Imm, Op2FpImm, true, MemExtendOrShiftAmount))
             goto doneops;
         if (!AppendOperand(sb, 3, Op3Kind, Op3Reg, Op3VectorElement, Op3Arrangement, Op3ShiftType, Op3Imm, Op3FpImm, true, MemExtendOrShiftAmount))

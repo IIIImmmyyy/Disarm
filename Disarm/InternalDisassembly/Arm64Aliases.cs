@@ -4,6 +4,24 @@ internal static class Arm64Aliases
 {
     public static void CheckForAlias(ref Arm64Instruction instruction)
     {
+        if (instruction.Mnemonic == Arm64Mnemonic.ANDS && instruction.Op0Reg is Arm64Register.W31 or Arm64Register.X31)
+        {
+            // TST 是零目的 ANDS 的别名：省略 Rd，同时把寄存器形式的移位量随操作数前移。
+            // FinalOpShiftType 仍描述最后一个源寄存器，不能在别名化时丢失 LSL/LSR/ASR/ROR。
+            instruction.Mnemonic = Arm64Mnemonic.TST;
+            instruction.MnemonicCategory = Arm64MnemonicCategory.Comparison;
+            instruction.Op0Reg = instruction.Op1Reg;
+            instruction.Op1Kind = instruction.Op2Kind;
+            instruction.Op1Reg = instruction.Op2Reg;
+            instruction.Op1Imm = instruction.Op2Imm;
+            instruction.Op2Kind = instruction.Op3Kind;
+            instruction.Op2Reg = Arm64Register.INVALID;
+            instruction.Op2Imm = instruction.Op3Imm;
+            instruction.Op3Kind = Arm64OperandKind.None;
+            instruction.Op3Imm = 0;
+            return;
+        }
+
         if (instruction.Mnemonic == Arm64Mnemonic.ORR && instruction.Op2Imm == 0 && instruction.Op1Reg is Arm64Register.X31 or Arm64Register.W31)
         {
             //Change ORR R1, X31, R2, 0 to MOV R1, R2
