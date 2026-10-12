@@ -229,6 +229,34 @@ internal static class Arm64NonScalarAdvancedSimd
 
     private static Arm64Instruction AdvancedSimdShiftByImmediate(uint instruction)
     {
+        // USHLL 的源只取低半/高半，目标 lane 宽度翻倍；位宽来自 immh 的最高置位。
+        var opcode = (instruction >> 11) & 31;
+        var immh = (instruction >> 19) & 15;
+        if (instruction.TestBit(29) && opcode == 0b10100 && immh is > 0 and < 8)
+        {
+            var q = instruction.TestBit(30);
+            var size = immh >= 4 ? 2 : immh >= 2 ? 1 : 0;
+            var source = size switch
+            {
+                0 => q ? Arm64ArrangementSpecifier.SixteenB : Arm64ArrangementSpecifier.EightB,
+                1 => q ? Arm64ArrangementSpecifier.EightH : Arm64ArrangementSpecifier.FourH,
+                _ => q ? Arm64ArrangementSpecifier.FourS : Arm64ArrangementSpecifier.TwoS
+            };
+            return new()
+            {
+                Mnemonic = q ? Arm64Mnemonic.USHLL2 : Arm64Mnemonic.USHLL,
+                MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath,
+                Op0Kind = Arm64OperandKind.Register,
+                Op0Reg = Arm64Register.V0 + (int)(instruction & 31),
+                Op0Arrangement = size switch { 0 => Arm64ArrangementSpecifier.EightH,
+                    1 => Arm64ArrangementSpecifier.FourS, _ => Arm64ArrangementSpecifier.TwoD },
+                Op1Kind = Arm64OperandKind.Register,
+                Op1Reg = Arm64Register.V0 + (int)((instruction >> 5) & 31),
+                Op1Arrangement = source,
+                Op2Kind = Arm64OperandKind.Immediate,
+                Op2Imm = (int)((instruction >> 16) & 127) - (8 << size)
+            };
+        }
         return new()
         {
             Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
@@ -816,7 +844,7 @@ internal static class Arm64NonScalarAdvancedSimd
                 0b11000 when size != 0b11 => Arm64Mnemonic.FRINTA,
                 0b11001 when size != 0b11 => Arm64Mnemonic.FRINTX,
                 0b11010 when size != 0b11 => Arm64Mnemonic.FCVTNU,
-                0b11011 when size != 0b11 => Arm64Mnemonic.FCVTMU,
+                0b11011 => size >= 2 ? Arm64Mnemonic.FCVTZU : Arm64Mnemonic.FCVTMU,
                 0b11100 when size != 0b11 => Arm64Mnemonic.FCVTAU,
                 0b11101 when size != 0b11 => Arm64Mnemonic.UCVTF,
                 0b11111 when size != 0b11 => Arm64Mnemonic.FRSQRTE,
@@ -840,16 +868,17 @@ internal static class Arm64NonScalarAdvancedSimd
                 0b01001 => Arm64Mnemonic.CMEQ,
                 0b01010 => Arm64Mnemonic.CMLT,
                 0b01011 => Arm64Mnemonic.ABS,
+                0b01110 when size >= 2 => Arm64Mnemonic.FCMLT,
                 // 向量 FABS 的单/双精度形式为 2S、4S、2D；size=11、Q=0 是未分配编码。
                 0b01111 when size == 0b10 || (size == 0b11 && q) => Arm64Mnemonic.FABS,
-                0b10010 => Arm64Mnemonic.XTN,
+                0b10010 when size != 3 => q ? Arm64Mnemonic.XTN2 : Arm64Mnemonic.XTN,
                 0b10100 => Arm64Mnemonic.SQXTN,
                 0b10110 when size != 0b11 => Arm64Mnemonic.FCVTN,
                 0b10111 when size != 0b11 => Arm64Mnemonic.FCVTL,
                 0b11000 when size != 0b11 => Arm64Mnemonic.FRINTN,
                 0b11001 when size != 0b11 => Arm64Mnemonic.FRINTM,
                 0b11010 when size != 0b11 => Arm64Mnemonic.FCVTNS,
-                0b11011 when size != 0b11 => Arm64Mnemonic.FCVTMS,
+                0b11011 => size >= 2 ? Arm64Mnemonic.FCVTZS : Arm64Mnemonic.FCVTMS,
                 0b11100 when size != 0b11 => Arm64Mnemonic.FCVTAS,
                 0b11101 when size != 0b11 => Arm64Mnemonic.SCVTF,
                 0b11111 when size != 0b11 => Arm64Mnemonic.FRECPE,
@@ -861,9 +890,11 @@ internal static class Arm64NonScalarAdvancedSimd
         // size differently from the generic integer two-register operations in
         // this group. Decode their complete architectural vector shapes here.
         Arm64ArrangementSpecifier arrangement;
-        if (mnemonic is Arm64Mnemonic.SCVTF or Arm64Mnemonic.UCVTF)
+        if (mnemonic is Arm64Mnemonic.SCVTF or Arm64Mnemonic.UCVTF or
+            Arm64Mnemonic.FCVTZS or Arm64Mnemonic.FCVTZU or Arm64Mnemonic.FCMLT)
         {
-            arrangement = (size, q) switch
+            var floatSize = mnemonic is Arm64Mnemonic.SCVTF or Arm64Mnemonic.UCVTF ? size : size & 1;
+            arrangement = (floatSize, q) switch
             {
                 (0b00, false) => Arm64ArrangementSpecifier.TwoS,
                 (0b00, true) => Arm64ArrangementSpecifier.FourS,
@@ -904,7 +935,13 @@ internal static class Arm64NonScalarAdvancedSimd
             Op0Arrangement = arrangement,
             Op1Kind = Arm64OperandKind.Register,
             Op1Reg = Arm64Register.V0 + rn,
-            Op1Arrangement = arrangement,
+            // XTN 输入是完整 128-bit 宽 lane；Q 仅决定目标写低半还是保留低半写高半。
+            Op1Arrangement = mnemonic is Arm64Mnemonic.XTN or Arm64Mnemonic.XTN2
+                ? size switch { 0 => Arm64ArrangementSpecifier.EightH,
+                    1 => Arm64ArrangementSpecifier.FourS, _ => Arm64ArrangementSpecifier.TwoD }
+                : arrangement,
+            Op2Kind = mnemonic == Arm64Mnemonic.FCMLT ? Arm64OperandKind.FloatingPointImmediate : Arm64OperandKind.None,
+            Op2FpImm = 0,
             MnemonicCategory = category,
         };
     }

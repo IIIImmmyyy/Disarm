@@ -218,9 +218,32 @@ internal static class Arm64Simd
 
     internal static Arm64Instruction LoadStoreSingleStructure(uint instruction)
     {
+        // 单寄存器 lane 加载保留 Q:S:size 编码的物理位置；LD1R/多寄存器/存储形态仍严格未实现。
+        var opcode = (instruction >> 13) & 7;
+        var size = (int)((instruction >> 10) & 3);
+        var s = (int)((instruction >> 12) & 1);
+        var q = (int)((instruction >> 30) & 1);
+        if (!instruction.TestBit(24) || !instruction.TestBit(22) || instruction.TestBit(21) ||
+            (opcode & 1) != 0 || opcode == 6)
+            return new() { Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+                MnemonicCategory = Arm64MnemonicCategory.SimdStructureLoadOrStore };
+        var (width, index) = opcode switch
+        {
+            0 => (Arm64VectorElementWidth.B, (q << 3) | (s << 2) | size),
+            2 when (size & 1) == 0 => (Arm64VectorElementWidth.H, (q << 2) | (s << 1) | (size >> 1)),
+            4 when size == 0 => (Arm64VectorElementWidth.S, (q << 1) | s),
+            4 when size == 1 && s == 0 => (Arm64VectorElementWidth.D, q),
+            _ => throw new Arm64UndefinedInstructionException("Invalid LD1 single-lane encoding")
+        };
+        var rn = (int)((instruction >> 5) & 31);
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+            Mnemonic = Arm64Mnemonic.LD1,
+            Op0Kind = Arm64OperandKind.VectorRegisterElement,
+            Op0Reg = Arm64Register.V0 + (int)(instruction & 31),
+            Op0VectorElement = new Arm64VectorElement(width, index),
+            Op1Kind = Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + rn,
             MnemonicCategory = Arm64MnemonicCategory.SimdStructureLoadOrStore, 
         };
     }
