@@ -156,6 +156,32 @@ public struct Arm64Instruction
         return expanded;
     }
 
+    /// <summary>
+    /// 将 CMN 别名恢复为同宽零目的 ADDS 的副本，复用计算端的结果快照与 flags 生命周期。
+    /// 两个源、移位量和扩展方式均从解码信息恢复，不改写调用方持有的 CMN。
+    /// </summary>
+    public Arm64Instruction ExpandCmnAlias()
+    {
+        if (Mnemonic != Arm64Mnemonic.CMN)
+            return this;
+
+        var expanded = this;
+        expanded.Mnemonic = Arm64Mnemonic.ADDS;
+        expanded.MnemonicCategory = Arm64MnemonicCategory.Math;
+        expanded.Op3Kind = Op2Kind;
+        expanded.Op3Imm = Op2Imm;
+        expanded.Op2Kind = Op1Kind;
+        expanded.Op2Reg = Op1Reg;
+        expanded.Op2Imm = Op1Imm;
+        expanded.Op1Kind = Op0Kind;
+        expanded.Op1Reg = Op0Reg;
+        expanded.Op1Imm = 0;
+        expanded.Op0Reg = Op0Reg is >= Arm64Register.W0 and <= Arm64Register.W31
+            ? Arm64Register.W31
+            : Arm64Register.X31;
+        return expanded;
+    }
+
     public override string ToString()
     {
         var sb = new StringBuilder();
@@ -183,6 +209,17 @@ public struct Arm64Instruction
             // TST 的 Op2 只保存可逆展开所需的移位量，不是第三个源操作数；显示时省略零移位。
             if (FinalOpShiftType != Arm64ShiftType.NONE)
                 sb.Append(", ").Append(FinalOpShiftType).Append(" #0x").Append(Op2Imm.ToString("X"));
+            return sb.ToString();
+        }
+        if (Mnemonic == Arm64Mnemonic.CMN)
+        {
+            // CMN 的 Op2 保存源寄存器的移位量，须随修饰符显示，不能误打印为第三个源。
+            if (FinalOpExtendType != Arm64ExtendType.NONE)
+                sb.Append(", ").Append(FinalOpExtendType);
+            else if (FinalOpShiftType != Arm64ShiftType.NONE)
+                sb.Append(", ").Append(FinalOpShiftType);
+            if (Op2Kind == Arm64OperandKind.Immediate && Op2Imm != 0)
+                sb.Append(" #0x").Append(Op2Imm.ToString("X"));
             return sb.ToString();
         }
         if (!AppendOperand(sb, 2, Op2Kind, Op2Reg, Op2VectorElement, Op2Arrangement, Op2ShiftType, Op2Imm, Op2FpImm, true, MemExtendOrShiftAmount))

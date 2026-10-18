@@ -75,6 +75,24 @@ internal static class Arm64Aliases
             return;
         }
 
+        if (instruction.Mnemonic == Arm64Mnemonic.ADDS && instruction.Op0Reg is Arm64Register.W31 or Arm64Register.X31)
+        {
+            // CMN 省略零目的寄存器；源操作数及移位量一起前移，保留 W/X 和 extend/shift 元数据，
+            // 使转换入口能无损恢复原 ADDS 并复用已有加法 flags 语义。
+            instruction.Mnemonic = Arm64Mnemonic.CMN;
+            instruction.MnemonicCategory = Arm64MnemonicCategory.Comparison;
+            instruction.Op0Reg = instruction.Op1Reg;
+            instruction.Op1Kind = instruction.Op2Kind;
+            instruction.Op1Reg = instruction.Op2Reg;
+            instruction.Op1Imm = instruction.Op2Imm;
+            instruction.Op2Kind = instruction.Op3Kind;
+            instruction.Op2Reg = Arm64Register.INVALID;
+            instruction.Op2Imm = instruction.Op3Imm;
+            instruction.Op3Kind = Arm64OperandKind.None;
+            instruction.Op3Imm = 0;
+            return;
+        }
+
         if (instruction.Mnemonic == Arm64Mnemonic.SUBS && instruction.Op0Kind == Arm64OperandKind.Register && instruction.Op0Reg is Arm64Register.W31 or Arm64Register.X31 && instruction.Op1Kind == Arm64OperandKind.Register && instruction.Op2Kind is Arm64OperandKind.Immediate or Arm64OperandKind.Register)
         {
             //SUBS W31, WXX, [IMM|RXX] => CMP WXX, [IMM|RXX]
