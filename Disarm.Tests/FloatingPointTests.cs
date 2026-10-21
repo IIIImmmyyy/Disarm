@@ -8,6 +8,19 @@ public class FloatingPointTests : BaseDisarmTest
     public FloatingPointTests(ITestOutputHelper outputHelper) : base(outputHelper)
     {
     }
+
+    [Fact]
+    public void ImmediateDoublePreservesHighFractionBits()
+    {
+        // 直接验证解码器发布的 64 位尾数，避免后续 IR/代码生成掩盖 uint 位移截断。
+        var twoAndHalf = DisassembleAndCheckMnemonic(0x1E609001, Arm64Mnemonic.FMOV);
+        Assert.Equal(Arm64Register.D1, twoAndHalf.Op0Reg);
+        Assert.Equal(Arm64OperandKind.FloatingPointImmediate, twoAndHalf.Op1Kind);
+        Assert.Equal(0x4004000000000000L, BitConverter.DoubleToInt64Bits(twoAndHalf.Op1FpImm));
+
+        var three = DisassembleAndCheckMnemonic(0x1E611001, Arm64Mnemonic.FMOV);
+        Assert.Equal(0x4008000000000000L, BitConverter.DoubleToInt64Bits(three.Op1FpImm));
+    }
     
     [Fact]
     public void DataProcessingThreeSourceTests()

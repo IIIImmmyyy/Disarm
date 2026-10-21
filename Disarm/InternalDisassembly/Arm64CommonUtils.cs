@@ -345,7 +345,8 @@ internal static class Arm64CommonUtils
         //Finally add bits 5 and 4
         exp |= (imm8 & 0b0011_0000U) >> 4;
 
-        var frac = imm8 & 0b0000_1111U;
+        // double 的尾数需要左移 48 位；先扩为 ulong，避免 uint 将移位数截成 16。
+        var frac = (ulong)(imm8 & 0b0000_1111U);
         frac <<= f - 4; //Append f - 4 0s
 
         var resultBits = (signBit ? 1UL : 0UL) << (n - 1);
