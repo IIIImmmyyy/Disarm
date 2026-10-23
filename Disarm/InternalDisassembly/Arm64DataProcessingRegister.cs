@@ -579,6 +579,8 @@ internal static class Arm64DataProcessingRegister
 
         var regD = baseReg + rd;
         var regA = baseReg + ra;
+        // SMULH 的编码虽共用三源布局，但没有累加操作数；Ra 位不能暴露为虚假的 X31。
+        var hasAccumulator = mnemonic != Arm64Mnemonic.SMULH;
 
         return new()
         {
@@ -586,11 +588,11 @@ internal static class Arm64DataProcessingRegister
             Op0Kind = Arm64OperandKind.Register,
             Op1Kind = Arm64OperandKind.Register,
             Op2Kind = Arm64OperandKind.Register,
-            Op3Kind = Arm64OperandKind.Register,
+            Op3Kind = hasAccumulator ? Arm64OperandKind.Register : Arm64OperandKind.None,
             Op0Reg = regD,
             Op1Reg = regN,
             Op2Reg = regM,
-            Op3Reg = regA,
+            Op3Reg = hasAccumulator ? regA : Arm64Register.INVALID,
             MnemonicCategory = Arm64MnemonicCategory.Math,
         };
     }
