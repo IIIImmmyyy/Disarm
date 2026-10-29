@@ -2,6 +2,23 @@
 
 internal static class Arm64LoadsStores
 {
+    // 表只在类型初始化时按架构拼写解析一次；不依赖 mnemonic enum 的数值排列。
+    private static readonly Arm64Mnemonic[,,] OrderedAtomicMnemonics = BuildOrderedAtomicMnemonics();
+
+    private static Arm64Mnemonic[,,] BuildOrderedAtomicMnemonics()
+    {
+        var operations = new[] { "LDADD", "LDCLR", "LDEOR", "LDSET", "LDSMAX", "LDSMIN", "LDUMAX", "LDUMIN", "SWP", "CAS" };
+        var widths = new[] { "", "B", "H" };
+        var orders = new[] { "", "A", "AL", "L" };
+        var table = new Arm64Mnemonic[operations.Length, widths.Length, orders.Length];
+        for (var operation = 0; operation < operations.Length; operation++)
+        for (var width = 0; width < widths.Length; width++)
+        for (var order = 0; order < orders.Length; order++)
+            table[operation, width, order] = (Arm64Mnemonic)Enum.Parse(typeof(Arm64Mnemonic),
+                operations[operation] + orders[order] + widths[width]);
+        return table;
+    }
+
     public static Arm64Instruction Disassemble(uint instruction)
     {
         var op0 = instruction >> 28; //Bits 28-31
@@ -15,7 +32,8 @@ internal static class Arm64LoadsStores
         //Unfortunately, this makes the code a bit ugly.
 
         //They are, at least, *somewhat* grouped by category using op0
-        if ((op0 & 0b1011) == 0)
+        // 同一 op0 还包括 B/H exclusive/CAS；只有 V=1 才是 SIMD structure 访存。
+        if ((op0 & 0b1011) == 0 && op1 == 1)
             //Mostly undefined instructions, but a couple of them are defined
             return DisassembleAdvancedLoadStore(instruction);
 
@@ -24,15 +42,6 @@ internal static class Arm64LoadsStores
             return DisassembleLoadStoreMemoryTags(instruction);
 
         //Five more categories for op0
-
-        if ((op0 & 0b1011) == 0b1000)
-        {
-            //Load/store exclusive pair, or undefined
-            if (op1 == 0 && op2 == 0 && op3.TestBit(5))
-                return LoadStoreExclusivePair(instruction);
-            
-            throw new Arm64UndefinedInstructionException($"Load/store: Undefined instruction - op0={op0}, op1={op1}, op2={op2}, op3={op3}");
-        }
 
         //The last 4 categories look only at the last 2 bits of op0, so we can switch now
         op0 &= 0b11;
@@ -191,56 +200,122 @@ internal static class Arm64LoadsStores
 
     private static Arm64Instruction DisassembleLoadStoreExclusiveRegOrderedOrCompareSwap(uint instruction)
     {
-        //Load/store exclusive register, load/store ordered, or compare + swap
-        var op0 = (instruction >> 28) & 0b1111; //Bits 28-31
-        var op1 = instruction.TestBit(26); //Bit 26
-        var op2 = (instruction >> 23) & 0b11; //Bits 23-24
-        var op3 = (instruction >> 16) & 0b11_1111; //Bits 16-21
-        var op4 = (instruction >> 10) & 0b11; // Bits 10-11
-        
-        if(op1)
-            throw new Arm64UndefinedInstructionException("Load/store (exclusive register|ordered)|compare/swap: op1 set");
-        
-        if(op2 == 0 && op3.TestBit(6))
-            throw new Arm64UndefinedInstructionException("Load/store (exclusive register|ordered)|compare/swap: op2=0, op3 hi bit set");
-
-        // op0 xx00 | op1 0 | op2 0x | op3 empty | op4 empty | Load/store exclusive
-        if ((op0 & 0b11) == 0 && !op1 && !op2.TestBit(1)) 
-            return LoadStoreExclusive(instruction);
-        
-        if(op2 != 1)
-            throw new Arm64UndefinedInstructionException("Load/store (exclusive register|ordered)|compare/swap: op2 was not 0 or 1");
-
-        if (op3.TestBit(6))
-            return CompareAndSwap(instruction);
-
-        return LoadStoreOrdered(instruction);
+        // BaseLoadStoreExclusive 的 o2/o1 是 bit23/21，不能测试六位 op3 的不存在的 bit6。
+        if (instruction.TestBit(26))
+            throw new Arm64UndefinedInstructionException("Exclusive/ordered/CAS: V=1 is unallocated");
+        var size = instruction >> 30;
+        var o2 = instruction.TestBit(23);
+        var o1 = instruction.TestBit(21);
+        if (o1)
+            return !o2 && size >= 2 ? LoadStoreExclusivePair(instruction) : CompareAndSwap(instruction);
+        return o2 ? LoadStoreOrdered(instruction) : LoadStoreExclusive(instruction);
     }
     
     private static Arm64Instruction LoadStoreExclusive(uint instruction)
     {
+        var size = (int)(instruction >> 30);
+        var load = instruction.TestBit(22);
+        var ordered = instruction.TestBit(15);
+        var rs = (int)((instruction >> 16) & 31);
+        // Rs(加载)/Rt2 是未使用的字段；架构将非全一值归为 CONSTRAINED UNPREDICTABLE，
+        // 不把这些不参与操作数的位误当成另一个寄存器或未分配指令。
+        var mnemonic = (load, ordered, size) switch
+        {
+            (false, false, 0) => Arm64Mnemonic.STXRB,
+            (false, false, 1) => Arm64Mnemonic.STXRH,
+            (false, false, _) => Arm64Mnemonic.STXR,
+            (false, true, 0) => Arm64Mnemonic.STLXRB,
+            (false, true, 1) => Arm64Mnemonic.STLXRH,
+            (false, true, _) => Arm64Mnemonic.STLXR,
+            (true, false, 0) => Arm64Mnemonic.LDXRB,
+            (true, false, 1) => Arm64Mnemonic.LDXRH,
+            (true, false, _) => Arm64Mnemonic.LDXR,
+            (true, true, 0) => Arm64Mnemonic.LDAXRB,
+            (true, true, 1) => Arm64Mnemonic.LDAXRH,
+            _ => Arm64Mnemonic.LDAXR
+        };
+        var data = (size == 3 ? Arm64Register.X0 : Arm64Register.W0) + (int)(instruction & 31);
+        // Store-exclusive 的首操作数始终是 W 状态寄存器，不随数据宽度改变。
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister, 
+            Mnemonic = mnemonic,
+            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = load ? data : Arm64Register.W0 + rs,
+            Op1Kind = load ? Arm64OperandKind.Memory : Arm64OperandKind.Register,
+            Op1Reg = load ? Arm64Register.INVALID : data,
+            Op2Kind = load ? Arm64OperandKind.None : Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31)
         };
     }
     
     private static Arm64Instruction CompareAndSwap(uint instruction)
     {
+        var size = (int)(instruction >> 30);
+        var pair = !instruction.TestBit(23);
+        var rs = (int)((instruction >> 16) & 31);
+        var rt = (int)(instruction & 31);
+        if (((instruction >> 10) & 31) != 31 || (pair && (size > 1 || ((rs | rt) & 1) != 0)))
+            throw new Arm64UndefinedInstructionException("CAS/CASP: invalid fixed field, pair size, or odd pair register");
+        var acquire = instruction.TestBit(22);
+        var release = instruction.TestBit(15);
+        var order = acquire ? release ? 2 : 1 : release ? 3 : 0;
+        var registerBase = (pair ? size == 1 : size == 3) ? Arm64Register.X0 : Arm64Register.W0;
+        if (pair)
+        {
+            // CASP 的第二个寄存器是编码隐含的相邻寄存器，必须展开两对，不能丢失一半数据。
+            return new()
+            {
+                Mnemonic = order switch { 0 => Arm64Mnemonic.CASP, 1 => Arm64Mnemonic.CASPA,
+                    2 => Arm64Mnemonic.CASPAL, _ => Arm64Mnemonic.CASPL },
+                MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+                Op0Kind = Arm64OperandKind.Register, Op0Reg = registerBase + rs,
+                Op1Kind = Arm64OperandKind.Register, Op1Reg = registerBase + rs + 1,
+                Op2Kind = Arm64OperandKind.Register, Op2Reg = registerBase + rt,
+                Op3Kind = Arm64OperandKind.Register, Op3Reg = registerBase + rt + 1,
+                Op4Kind = Arm64OperandKind.Memory,
+                MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31)
+            };
+        }
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.Comparison, 
+            Mnemonic = OrderedAtomicMnemonics[9, size < 2 ? size + 1 : 0, order],
+            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+            Op0Kind = Arm64OperandKind.Register, Op0Reg = registerBase + rs,
+            Op1Kind = Arm64OperandKind.Register, Op1Reg = registerBase + rt,
+            Op2Kind = Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31)
         };
     }
     
     private static Arm64Instruction LoadStoreOrdered(uint instruction)
     {
+        var size = (int)(instruction >> 30);
+        var load = instruction.TestBit(22);
+        var ordered = instruction.TestBit(15);
+        var mnemonic = (load, ordered, size) switch
+        {
+            (false, false, 0) => Arm64Mnemonic.STLLRB,
+            (false, false, 1) => Arm64Mnemonic.STLLRH,
+            (false, false, _) => Arm64Mnemonic.STLLR,
+            (false, true, 0) => Arm64Mnemonic.STLRB,
+            (false, true, 1) => Arm64Mnemonic.STLRH,
+            (false, true, _) => Arm64Mnemonic.STLR,
+            (true, false, 0) => Arm64Mnemonic.LDLARB,
+            (true, false, 1) => Arm64Mnemonic.LDLARH,
+            (true, false, _) => Arm64Mnemonic.LDLAR,
+            (true, true, 0) => Arm64Mnemonic.LDARB,
+            (true, true, 1) => Arm64Mnemonic.LDARH,
+            _ => Arm64Mnemonic.LDAR
+        };
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister, 
+            Mnemonic = mnemonic,
+            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = (size == 3 ? Arm64Register.X0 : Arm64Register.W0) + (int)(instruction & 31),
+            Op1Kind = Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31)
         };
     }
 
@@ -325,12 +400,10 @@ internal static class Arm64LoadsStores
     
     private static Arm64Instruction LdarpOrStlr(uint instruction)
     {
-        // FEAT_LRCPC2
-        return new()
-        {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister, 
-        };
+        // FEAT_LRCPC2 的 imm9 是未缩放的有符号字节偏移；复用整数 sign-load 宽度规则。
+        if ((instruction & 0x04200C00) != 0)
+            throw new Arm64UndefinedInstructionException("LRCPC2: reserved fixed field");
+        return UnscaledIntegerAccess(instruction, true);
     }
 
     private static Arm64Instruction DisassembleLoadStorePairs(uint instruction)
@@ -808,10 +881,38 @@ internal static class Arm64LoadsStores
 
     private static Arm64Instruction AtomicMemoryOperation(uint instruction)
     {
+        var size = (int)(instruction >> 30);
+        var acquire = instruction.TestBit(23);
+        var release = instruction.TestBit(22);
+        var opcode = (int)((instruction >> 12) & 15);
+        var rs = (int)((instruction >> 16) & 31);
+        if (instruction.TestBit(26))
+            throw new Arm64UndefinedInstructionException("Atomic memory operation: V=1 is unallocated");
+        if (opcode == 0b1100 && acquire && !release && rs == 31)
+        {
+            // LDAPR 占用 atomic 编码组，但只有一个结果寄存器，不是三操作数的 RMW。
+            return new()
+            {
+                Mnemonic = size switch { 0 => Arm64Mnemonic.LDAPRB, 1 => Arm64Mnemonic.LDAPRH, _ => Arm64Mnemonic.LDAPR },
+                MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+                Op0Kind = Arm64OperandKind.Register,
+                Op0Reg = (size == 3 ? Arm64Register.X0 : Arm64Register.W0) + (int)(instruction & 31),
+                Op1Kind = Arm64OperandKind.Memory,
+                MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31)
+            };
+        }
+        if (opcode > 8)
+            throw new Arm64UndefinedInstructionException("Atomic memory operation: unallocated opcode/LDAPR fields");
+        var order = acquire ? release ? 2 : 1 : release ? 3 : 0;
+        var registerBase = size == 3 ? Arm64Register.X0 : Arm64Register.W0;
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+            Mnemonic = OrderedAtomicMnemonics[opcode, size < 2 ? size + 1 : 0, order],
             MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+            Op0Kind = Arm64OperandKind.Register, Op0Reg = registerBase + rs,
+            Op1Kind = Arm64OperandKind.Register, Op1Reg = registerBase + (int)(instruction & 31),
+            Op2Kind = Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31)
         };
     }
 
@@ -940,10 +1041,20 @@ internal static class Arm64LoadsStores
 
     private static Arm64Instruction LoadStoreRegisterFromPac(uint instruction)
     {
+        if ((instruction & 0xFE200400) != 0xF8200400)
+            throw new Arm64UndefinedInstructionException("Authenticated load: reserved fixed field");
+        // signed imm10 分散在 S:imm9 中，再按八字节缩放；W 仅选择 offset/pre-index。
+        var imm10 = (((instruction >> 22) & 1) << 9) | ((instruction >> 12) & 511);
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+            Mnemonic = instruction.TestBit(23) ? Arm64Mnemonic.LDRAB : Arm64Mnemonic.LDRAA,
             MnemonicCategory = Arm64MnemonicCategory.PointerAuthentication,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = Arm64Register.X0 + (int)(instruction & 31),
+            Op1Kind = Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31),
+            MemOffset = Arm64CommonUtils.SignExtend(imm10, 10, 64) << 3,
+            MemIndexMode = instruction.TestBit(11) ? Arm64MemoryIndexMode.PreIndex : Arm64MemoryIndexMode.Offset
         };
     }
 
@@ -1051,19 +1162,64 @@ internal static class Arm64LoadsStores
 
     private static Arm64Instruction LoadStoreRegisterUnprivileged(uint instruction)
     {
+        if (instruction.TestBit(26))
+            throw new Arm64UndefinedInstructionException("Unprivileged load/store: vector encoding is unallocated");
+        return UnscaledIntegerAccess(instruction, false);
+    }
+
+    private static Arm64Instruction UnscaledIntegerAccess(uint instruction, bool rcpc)
+    {
+        // 两个指令族共享 size/opc 的扩展规则；W/X 目标宽度不能由字节/半字访问宽度代替。
+        var size = (int)(instruction >> 30);
+        var opc = (instruction >> 22) & 3;
+        var mnemonic = (opc, size) switch
+        {
+            (0, 0) => rcpc ? Arm64Mnemonic.STLURB : Arm64Mnemonic.STTRB,
+            (0, 1) => rcpc ? Arm64Mnemonic.STLURH : Arm64Mnemonic.STTRH,
+            (0, _) => rcpc ? Arm64Mnemonic.STLUR : Arm64Mnemonic.STTR,
+            (1, 0) => rcpc ? Arm64Mnemonic.LDAPURB : Arm64Mnemonic.LDTRB,
+            (1, 1) => rcpc ? Arm64Mnemonic.LDAPURH : Arm64Mnemonic.LDTRH,
+            (1, _) => rcpc ? Arm64Mnemonic.LDAPUR : Arm64Mnemonic.LDTR,
+            (2, 0) or (3, 0) => rcpc ? Arm64Mnemonic.LDAPURSB : Arm64Mnemonic.LDTRSB,
+            (2, 1) or (3, 1) => rcpc ? Arm64Mnemonic.LDAPURSH : Arm64Mnemonic.LDTRSH,
+            (2, 2) => rcpc ? Arm64Mnemonic.LDAPURSW : Arm64Mnemonic.LDTRSW,
+            _ => throw new Arm64UndefinedInstructionException("Unscaled integer access: unallocated size/opc")
+        };
+        var wide = size == 3 || opc == 2;
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+            Mnemonic = mnemonic,
             MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = (wide ? Arm64Register.X0 : Arm64Register.W0) + (int)(instruction & 31),
+            Op1Kind = Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31),
+            MemOffset = Arm64CommonUtils.SignExtend((instruction >> 12) & 511, 9, 64)
         };
     }
 
     private static Arm64Instruction LoadStoreExclusivePair(uint instruction)
     {
+        var size = instruction >> 30;
+        var load = instruction.TestBit(22);
+        var ordered = instruction.TestBit(15);
+        var rs = (int)((instruction >> 16) & 31);
+        if (size < 2)
+            throw new Arm64UndefinedInstructionException("Exclusive pair: invalid element size");
+        var registerBase = size == 3 ? Arm64Register.X0 : Arm64Register.W0;
+        var first = registerBase + (int)(instruction & 31);
+        var second = registerBase + (int)((instruction >> 10) & 31);
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister, 
+            Mnemonic = load ? ordered ? Arm64Mnemonic.LDAXP : Arm64Mnemonic.LDXP
+                : ordered ? Arm64Mnemonic.STLXP : Arm64Mnemonic.STXP,
+            MnemonicCategory = Arm64MnemonicCategory.MemoryToOrFromRegister,
+            Op0Kind = Arm64OperandKind.Register, Op0Reg = load ? first : Arm64Register.W0 + rs,
+            Op1Kind = Arm64OperandKind.Register, Op1Reg = load ? second : first,
+            Op2Kind = load ? Arm64OperandKind.Memory : Arm64OperandKind.Register,
+            Op2Reg = load ? Arm64Register.INVALID : second,
+            Op3Kind = load ? Arm64OperandKind.None : Arm64OperandKind.Memory,
+            MemBase = Arm64Register.X0 + (int)((instruction >> 5) & 31)
         };
     }
 }

@@ -22,9 +22,11 @@ internal static class Arm64Aliases
             return;
         }
 
-        if (instruction.Mnemonic == Arm64Mnemonic.ORR && instruction.Op2Imm == 0 && instruction.Op1Reg is Arm64Register.X31 or Arm64Register.W31)
+        if (instruction.Mnemonic == Arm64Mnemonic.ORR && instruction.Op2Kind == Arm64OperandKind.Register &&
+            instruction.Op3Imm == 0 && instruction.Op1Reg is Arm64Register.X31 or Arm64Register.W31)
         {
-            //Change ORR R1, X31, R2, 0 to MOV R1, R2
+            // 寄存器 ORR 的移位量在 Op3，不能用寄存器槽默认的 Op2Imm=0 证明可直接拷贝。
+            // 零源只消去 OR，本身不会消去另一源的非零移位。
             instruction.Mnemonic = Arm64Mnemonic.MOV;
             
             //Clear immediate
@@ -61,14 +63,18 @@ internal static class Arm64Aliases
             return;
         }
 
-        if (instruction.Mnemonic == Arm64Mnemonic.ORR && instruction.Op1Kind == Arm64OperandKind.Register && instruction.Op2Kind == Arm64OperandKind.Register && instruction.Op1Reg == instruction.Op2Reg)
+        if (instruction.Mnemonic == Arm64Mnemonic.ORR && instruction.Op1Kind == Arm64OperandKind.Register &&
+            instruction.Op2Kind == Arm64OperandKind.Register && instruction.Op1Reg == instruction.Op2Reg &&
+            instruction.Op3Imm == 0)
         {
-            //Change ORR R0, R1, R1 => MOV R0, R1
+            // 相同源只有在无移位时才满足 r|r=r；SIMD ORR 没有移位，沿用同一等价条件。
             instruction.Mnemonic = Arm64Mnemonic.MOV;
             
             //Clear op2
             instruction.Op2Kind = Arm64OperandKind.None;
             instruction.Op2Reg = Arm64Register.INVALID;
+            instruction.Op3Kind = Arm64OperandKind.None;
+            instruction.Op3Imm = 0;
             
             instruction.MnemonicCategory = Arm64MnemonicCategory.Move;
             
@@ -227,20 +233,20 @@ internal static class Arm64Aliases
             }
         }
 
-        if (instruction.Mnemonic == Arm64Mnemonic.SBFM && instruction.Op2Kind == Arm64OperandKind.Immediate && instruction.Op3Kind == Arm64OperandKind.Immediate && instruction.Op2Imm == 0)
+        // SXTB/H 只匹配精确的 7/15，SXTW 还要求 X 目的寄存器；其余合法 SBFM 继续匹配下方别名。
+        // 不能把整个 7..31 区间交给只接受三个离散值的 switch，也不能输出不存在的 SXTW Wd,Wn。
+        if (instruction.Mnemonic == Arm64Mnemonic.SBFM && instruction.Op2Kind == Arm64OperandKind.Immediate &&
+            instruction.Op3Kind == Arm64OperandKind.Immediate && instruction.Op2Imm == 0 &&
+            (instruction.Op3Imm is 7 or 15 || (instruction.Op3Imm == 31 &&
+                instruction.Op0Reg is >= Arm64Register.X0 and <= Arm64Register.X31)))
         {
-            //Check imm3
             var imm3 = instruction.Op3Imm;
-            
-            if(imm3 is > 0b11111 or < 0b111)
-                return;
 
             var newMnemonic = imm3 switch
             {
                 0b111 => Arm64Mnemonic.SXTB,
                 0b1111 => Arm64Mnemonic.SXTH,
-                0b11111 => Arm64Mnemonic.SXTW,
-                _ => throw new("Impossible imm3")
+                _ => Arm64Mnemonic.SXTW
             };
             
             //SBFM Rd, Rn, 0, imm3 => SXT{B|H|W} Rd, Rn
@@ -342,7 +348,8 @@ internal static class Arm64Aliases
             // Check if this matches SBFIZ pattern: SBFM Rd, Rn, #(-lsb MOD width), #(width-lsb-1)
             var lsb = (regWidth - immr) % regWidth;
             var fieldWidth = imms + 1;
-            if (lsb + fieldWidth <= regWidth && immr == (regWidth - lsb) % regWidth && imms == fieldWidth - 1)
+            // 架构在 imms<immr 时首选 SBFIZ；immr=0 是抽取，须继续走 SBFX 而非把 lsb=0 当插入。
+            if (imms < immr)
             {
                 // Convert to SBFIZ
                 instruction.Mnemonic = Arm64Mnemonic.SBFIZ;

@@ -58,16 +58,41 @@ internal static class Arm64DataProcessingRegister
 
         if (opcode2 == 1)
         {
-            //FEAT_PAUTH stuff. Not implemented in disarm, yet.
-            //But also literally not defined if sf == 0
-            
+            // PAUTH 使用 X 寄存器；零 modifier 形式的 Rn=31 表示常量零，不是 SP 源操作数。
             if(!sf)
                 throw new Arm64UndefinedInstructionException("DataProcessing1Source: opcode2 == 1 and sf == 0");
-            
+            if (opcode >= 8 && rn != 31)
+                throw new Arm64UndefinedInstructionException("PAUTH zero/strip form: Rn must be all ones");
+            var authentication = opcode switch
+            {
+                0 => Arm64Mnemonic.PACIA,
+                1 => Arm64Mnemonic.PACIB,
+                2 => Arm64Mnemonic.PACDA,
+                3 => Arm64Mnemonic.PACDB,
+                4 => Arm64Mnemonic.AUTIA,
+                5 => Arm64Mnemonic.AUTIB,
+                6 => Arm64Mnemonic.AUTDA,
+                7 => Arm64Mnemonic.AUTDB,
+                8 => Arm64Mnemonic.PACIZA,
+                9 => Arm64Mnemonic.PACIZB,
+                10 => Arm64Mnemonic.PACDZA,
+                11 => Arm64Mnemonic.PACDZB,
+                12 => Arm64Mnemonic.AUTIZA,
+                13 => Arm64Mnemonic.AUTIZB,
+                14 => Arm64Mnemonic.AUTDZA,
+                15 => Arm64Mnemonic.AUTDZB,
+                16 => Arm64Mnemonic.XPACI,
+                17 => Arm64Mnemonic.XPACD,
+                _ => throw new Arm64UndefinedInstructionException("PAUTH: unallocated opcode")
+            };
             return new()
             {
-                Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+                Mnemonic = authentication,
                 MnemonicCategory = Arm64MnemonicCategory.PointerAuthentication,
+                Op0Kind = Arm64OperandKind.Register,
+                Op0Reg = Arm64Register.X0 + rd,
+                Op1Kind = opcode < 8 ? Arm64OperandKind.Register : Arm64OperandKind.None,
+                Op1Reg = opcode < 8 ? Arm64Register.X0 + rn : Arm64Register.INVALID
             };
         }
         

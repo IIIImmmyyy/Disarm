@@ -229,40 +229,88 @@ internal static class Arm64NonScalarAdvancedSimd
 
     private static Arm64Instruction AdvancedSimdShiftByImmediate(uint instruction)
     {
-        // USHLL 的源只取低半/高半，目标 lane 宽度翻倍；位宽来自 immh 的最高置位。
+        // immh 的最高置位决定元素宽度；缩窄/扩宽使用该宽度的不同端，Q 决定高半形式。
+        var q = instruction.TestBit(30);
+        var u = instruction.TestBit(29);
         var opcode = (instruction >> 11) & 31;
         var immh = (instruction >> 19) & 15;
-        if (instruction.TestBit(29) && opcode == 0b10100 && immh is > 0 and < 8)
+        if (immh == 0)
+            throw new Arm64UndefinedInstructionException("Advanced SIMD shift immediate: immh=0 is unallocated");
+
+        var size = Arm64CommonUtils.HighestSetBit(immh, 4);
+        var elementBits = 8 << size;
+        var imm = (int)((instruction >> 16) & 127);
+        var isNarrow = opcode is >= 0b10000 and <= 0b10011;
+        var isWiden = opcode == 0b10100;
+        var isFixedPoint = opcode is 0b11100 or 0b11111;
+
+        // 缩窄/扩宽没有 128-bit 元素；普通 D 元素向量只允许 2D，定点转换没有 B 元素。
+        if ((isNarrow || isWiden) ? size == 3 : size == 3 && !q)
+            throw new Arm64UndefinedInstructionException("Advanced SIMD shift immediate: reserved element width/Q");
+        if (isFixedPoint && size == 0)
+            throw new Arm64UndefinedInstructionException("Advanced SIMD fixed-point conversion: byte elements are unallocated");
+
+        var mnemonic = (u, opcode) switch
         {
-            var q = instruction.TestBit(30);
-            var size = immh >= 4 ? 2 : immh >= 2 ? 1 : 0;
-            var source = size switch
-            {
-                0 => q ? Arm64ArrangementSpecifier.SixteenB : Arm64ArrangementSpecifier.EightB,
-                1 => q ? Arm64ArrangementSpecifier.EightH : Arm64ArrangementSpecifier.FourH,
-                _ => q ? Arm64ArrangementSpecifier.FourS : Arm64ArrangementSpecifier.TwoS
-            };
-            return new()
-            {
-                Mnemonic = q ? Arm64Mnemonic.USHLL2 : Arm64Mnemonic.USHLL,
-                MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath,
-                Op0Kind = Arm64OperandKind.Register,
-                Op0Reg = Arm64Register.V0 + (int)(instruction & 31),
-                Op0Arrangement = size switch { 0 => Arm64ArrangementSpecifier.EightH,
-                    1 => Arm64ArrangementSpecifier.FourS, _ => Arm64ArrangementSpecifier.TwoD },
-                Op1Kind = Arm64OperandKind.Register,
-                Op1Reg = Arm64Register.V0 + (int)((instruction >> 5) & 31),
-                Op1Arrangement = source,
-                Op2Kind = Arm64OperandKind.Immediate,
-                Op2Imm = (int)((instruction >> 16) & 127) - (8 << size)
-            };
-        }
+            (false, 0b00000) => Arm64Mnemonic.SSHR,
+            (true, 0b00000) => Arm64Mnemonic.USHR,
+            (false, 0b00010) => Arm64Mnemonic.SSRA,
+            (true, 0b00010) => Arm64Mnemonic.USRA,
+            (false, 0b00100) => Arm64Mnemonic.SRSHR,
+            (true, 0b00100) => Arm64Mnemonic.URSHR,
+            (false, 0b00110) => Arm64Mnemonic.SRSRA,
+            (true, 0b00110) => Arm64Mnemonic.URSRA,
+            (true, 0b01000) => Arm64Mnemonic.SRI,
+            (false, 0b01010) => Arm64Mnemonic.SHL,
+            (true, 0b01010) => Arm64Mnemonic.SLI,
+            (true, 0b01100) => Arm64Mnemonic.SQSHLU,
+            (false, 0b01110) => Arm64Mnemonic.SQSHL,
+            (true, 0b01110) => Arm64Mnemonic.UQSHL,
+            (false, 0b10000) => q ? Arm64Mnemonic.SHRN2 : Arm64Mnemonic.SHRN,
+            (true, 0b10000) => q ? Arm64Mnemonic.SQSHRUN2 : Arm64Mnemonic.SQSHRUN,
+            (false, 0b10001) => q ? Arm64Mnemonic.RSHRN2 : Arm64Mnemonic.RSHRN,
+            (true, 0b10001) => q ? Arm64Mnemonic.SQRSHRUN2 : Arm64Mnemonic.SQRSHRUN,
+            (false, 0b10010) => q ? Arm64Mnemonic.SQSHRN2 : Arm64Mnemonic.SQSHRN,
+            (true, 0b10010) => q ? Arm64Mnemonic.UQSHRN2 : Arm64Mnemonic.UQSHRN,
+            (false, 0b10011) => q ? Arm64Mnemonic.SQRSHRN2 : Arm64Mnemonic.SQRSHRN,
+            (true, 0b10011) => q ? Arm64Mnemonic.UQRSHRN2 : Arm64Mnemonic.UQRSHRN,
+            (false, 0b10100) => q ? Arm64Mnemonic.SSHLL2 : Arm64Mnemonic.SSHLL,
+            (true, 0b10100) => q ? Arm64Mnemonic.USHLL2 : Arm64Mnemonic.USHLL,
+            (false, 0b11100) => Arm64Mnemonic.SCVTF,
+            (true, 0b11100) => Arm64Mnemonic.UCVTF,
+            (false, 0b11111) => Arm64Mnemonic.FCVTZS,
+            (true, 0b11111) => Arm64Mnemonic.FCVTZU,
+            _ => throw new Arm64UndefinedInstructionException($"Advanced SIMD shift immediate: unallocated U={u}, opcode={opcode}")
+        };
+
+        var leftShift = opcode is 0b01010 or 0b01100 or 0b01110 or 0b10100;
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+            Mnemonic = mnemonic,
             MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = Arm64Register.V0 + (int)(instruction & 31),
+            Op0Arrangement = isWiden ? VectorArrangement(size + 1, true) : VectorArrangement(size, q),
+            Op1Kind = Arm64OperandKind.Register,
+            Op1Reg = Arm64Register.V0 + (int)((instruction >> 5) & 31),
+            Op1Arrangement = isNarrow ? VectorArrangement(size + 1, true) : VectorArrangement(size, q),
+            Op2Kind = Arm64OperandKind.Immediate,
+            Op2Imm = leftShift ? imm - elementBits : 2 * elementBits - imm
         };
     }
+
+    // 这里只构造已由指令族验证的向量视图；1D 在这些指令族中不是合法向量 arrangement。
+    private static Arm64ArrangementSpecifier VectorArrangement(int size, bool q) => (size, q) switch
+    {
+        (0, false) => Arm64ArrangementSpecifier.EightB,
+        (0, true) => Arm64ArrangementSpecifier.SixteenB,
+        (1, false) => Arm64ArrangementSpecifier.FourH,
+        (1, true) => Arm64ArrangementSpecifier.EightH,
+        (2, false) => Arm64ArrangementSpecifier.TwoS,
+        (2, true) => Arm64ArrangementSpecifier.FourS,
+        (3, true) => Arm64ArrangementSpecifier.TwoD,
+        _ => throw new Arm64UndefinedInstructionException("Reserved vector arrangement")
+    };
 
     private static Arm64Instruction AdvancedSimdVectorXIndexedElement(uint instruction)
     {
@@ -786,28 +834,163 @@ internal static class Arm64NonScalarAdvancedSimd
 
     private static Arm64Instruction AdvancedSimdThreeSameFp16(uint instruction)
     {
+        // FP16 的 A 位和三位 opcode 独立编码运算，所有操作数都使用 4H/8H 视图。
+        var u = instruction.TestBit(29);
+        var a = instruction.TestBit(23);
+        var opcode = (instruction >> 11) & 7;
+        var mnemonic = (u, a, opcode) switch
+        {
+            (false, false, 0) => Arm64Mnemonic.FMAXNM,
+            (false, true, 0) => Arm64Mnemonic.FMINNM,
+            (true, false, 0) => Arm64Mnemonic.FMAXNMP,
+            (true, true, 0) => Arm64Mnemonic.FMINNMP,
+            (false, false, 1) => Arm64Mnemonic.FMLA,
+            (false, true, 1) => Arm64Mnemonic.FMLS,
+            (false, false, 2) => Arm64Mnemonic.FADD,
+            (false, true, 2) => Arm64Mnemonic.FSUB,
+            (true, false, 2) => Arm64Mnemonic.FADDP,
+            (true, true, 2) => Arm64Mnemonic.FABD,
+            (false, false, 3) => Arm64Mnemonic.FMULX,
+            (true, false, 3) => Arm64Mnemonic.FMUL,
+            (false, false, 4) => Arm64Mnemonic.FCMEQ,
+            (true, false, 4) => Arm64Mnemonic.FCMGE,
+            (true, true, 4) => Arm64Mnemonic.FCMGT,
+            (true, false, 5) => Arm64Mnemonic.FACGE,
+            (true, true, 5) => Arm64Mnemonic.FACGT,
+            (false, false, 6) => Arm64Mnemonic.FMAX,
+            (false, true, 6) => Arm64Mnemonic.FMIN,
+            (true, false, 6) => Arm64Mnemonic.FMAXP,
+            (true, true, 6) => Arm64Mnemonic.FMINP,
+            (false, false, 7) => Arm64Mnemonic.FRECPS,
+            (false, true, 7) => Arm64Mnemonic.FRSQRTS,
+            (true, false, 7) => Arm64Mnemonic.FDIV,
+            // 新架构的 FAMAX/FAMIN 暂未建模，不能当作 FMUL 的同义编码。
+            (false, true, 3) or (true, true, 3) => Arm64Mnemonic.UNIMPLEMENTED,
+            _ => throw new Arm64UndefinedInstructionException("Advanced SIMD FP16 three same: unallocated opcode")
+        };
+        var arrangement = VectorArrangement(1, instruction.TestBit(30));
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath, 
+            Mnemonic = mnemonic,
+            MnemonicCategory = mnemonic is Arm64Mnemonic.FCMEQ or Arm64Mnemonic.FCMGE or
+                Arm64Mnemonic.FCMGT or Arm64Mnemonic.FACGE or Arm64Mnemonic.FACGT
+                ? Arm64MnemonicCategory.SimdComparison : Arm64MnemonicCategory.SimdVectorMath,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = Arm64Register.V0 + (int)(instruction & 31),
+            Op0Arrangement = arrangement,
+            Op1Kind = Arm64OperandKind.Register,
+            Op1Reg = Arm64Register.V0 + (int)((instruction >> 5) & 31),
+            Op1Arrangement = arrangement,
+            Op2Kind = Arm64OperandKind.Register,
+            Op2Reg = Arm64Register.V0 + (int)((instruction >> 16) & 31),
+            Op2Arrangement = arrangement
         };
     }
 
     private static Arm64Instruction AdvancedSimdTwoRegisterMiscFp16(uint instruction)
     {
+        // FP16 2-reg misc 的浮点零比较必须显式保留 #0.0 操作数，不能按普通 unary 丢失。
+        var u = instruction.TestBit(29);
+        var a = instruction.TestBit(23);
+        var opcode = (instruction >> 12) & 31;
+        var mnemonic = (u, a, opcode) switch
+        {
+            (false, true, 0b01100) => Arm64Mnemonic.FCMGT,
+            (true, true, 0b01100) => Arm64Mnemonic.FCMGE,
+            (false, true, 0b01101) => Arm64Mnemonic.FCMEQ,
+            (true, true, 0b01101) => Arm64Mnemonic.FCMLE,
+            (false, true, 0b01110) => Arm64Mnemonic.FCMLT,
+            (false, true, 0b01111) => Arm64Mnemonic.FABS,
+            (true, true, 0b01111) => Arm64Mnemonic.FNEG,
+            (false, false, 0b11000) => Arm64Mnemonic.FRINTN,
+            (false, true, 0b11000) => Arm64Mnemonic.FRINTP,
+            (true, false, 0b11000) => Arm64Mnemonic.FRINTA,
+            (false, false, 0b11001) => Arm64Mnemonic.FRINTM,
+            (false, true, 0b11001) => Arm64Mnemonic.FRINTZ,
+            (true, false, 0b11001) => Arm64Mnemonic.FRINTX,
+            (true, true, 0b11001) => Arm64Mnemonic.FRINTI,
+            (false, false, 0b11010) => Arm64Mnemonic.FCVTNS,
+            (false, true, 0b11010) => Arm64Mnemonic.FCVTPS,
+            (true, false, 0b11010) => Arm64Mnemonic.FCVTNU,
+            (true, true, 0b11010) => Arm64Mnemonic.FCVTPU,
+            (false, false, 0b11011) => Arm64Mnemonic.FCVTMS,
+            (false, true, 0b11011) => Arm64Mnemonic.FCVTZS,
+            (true, false, 0b11011) => Arm64Mnemonic.FCVTMU,
+            (true, true, 0b11011) => Arm64Mnemonic.FCVTZU,
+            (false, false, 0b11100) => Arm64Mnemonic.FCVTAS,
+            (true, false, 0b11100) => Arm64Mnemonic.FCVTAU,
+            (false, false, 0b11101) => Arm64Mnemonic.SCVTF,
+            (false, true, 0b11101) => Arm64Mnemonic.FRECPE,
+            (true, false, 0b11101) => Arm64Mnemonic.UCVTF,
+            (true, true, 0b11101) => Arm64Mnemonic.FRSQRTE,
+            (true, true, 0b11111) => Arm64Mnemonic.FSQRT,
+            _ => throw new Arm64UndefinedInstructionException("Advanced SIMD FP16 two register misc: unallocated opcode")
+        };
+        var comparison = opcode is >= 0b01100 and <= 0b01110;
+        var arrangement = VectorArrangement(1, instruction.TestBit(30));
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.Unspecified, //Could be convert to/from float, or fp comparison, or fp math
+            Mnemonic = mnemonic,
+            MnemonicCategory = comparison ? Arm64MnemonicCategory.SimdComparison : Arm64MnemonicCategory.SimdVectorMath,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = Arm64Register.V0 + (int)(instruction & 31),
+            Op0Arrangement = arrangement,
+            Op1Kind = Arm64OperandKind.Register,
+            Op1Reg = Arm64Register.V0 + (int)((instruction >> 5) & 31),
+            Op1Arrangement = arrangement,
+            Op2Kind = comparison ? Arm64OperandKind.FloatingPointImmediate : Arm64OperandKind.None,
+            Op2FpImm = 0
         };
     }
 
     private static Arm64Instruction AdvancedSimdThreeRegExtension(uint instruction)
     {
+        var q = instruction.TestBit(30);
+        var u = instruction.TestBit(29);
+        var size = (int)((instruction >> 22) & 3);
+        var opcode = (instruction >> 11) & 31;
+        Arm64Mnemonic mnemonic;
+        Arm64ArrangementSpecifier destination;
+        Arm64ArrangementSpecifier source;
+
+        // RDM 保持 H/S 宽度；dot/matrix 将 B 输入累加到 S，不得给三者共用 arrangement。
+        if (u && size is 1 or 2 && opcode is 0b10000 or 0b10001)
+        {
+            mnemonic = opcode == 0b10000 ? Arm64Mnemonic.SQRDMLAH : Arm64Mnemonic.SQRDMLSH;
+            destination = source = VectorArrangement(size, q);
+        }
+        else if (size == 2 && (opcode == 0b10010 || (!u && opcode == 0b10011)))
+        {
+            mnemonic = opcode == 0b10011 ? Arm64Mnemonic.USDOT : u ? Arm64Mnemonic.UDOT : Arm64Mnemonic.SDOT;
+            destination = VectorArrangement(2, q);
+            source = VectorArrangement(0, q);
+        }
+        else if (size == 2 && q && (opcode == 0b10100 || (!u && opcode == 0b10101)))
+        {
+            mnemonic = opcode == 0b10101 ? Arm64Mnemonic.USMMLA : u ? Arm64Mnemonic.UMMLA : Arm64Mnemonic.SMMLA;
+            destination = Arm64ArrangementSpecifier.FourS;
+            source = Arm64ArrangementSpecifier.SixteenB;
+        }
+        else
+        {
+            // BF16、复数和后续扩展属于同一主编码组；未核对的子族继续严格未实现。
+            return new() { Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+                MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath };
+        }
+
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath, 
+            Mnemonic = mnemonic,
+            MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = Arm64Register.V0 + (int)(instruction & 31),
+            Op0Arrangement = destination,
+            Op1Kind = Arm64OperandKind.Register,
+            Op1Reg = Arm64Register.V0 + (int)((instruction >> 5) & 31),
+            Op1Arrangement = source,
+            Op2Kind = Arm64OperandKind.Register,
+            Op2Reg = Arm64Register.V0 + (int)((instruction >> 16) & 31),
+            Op2Arrangement = source
         };
     }
 
@@ -836,7 +1019,8 @@ internal static class Arm64NonScalarAdvancedSimd
                 0b01000 => Arm64Mnemonic.CMGE,
                 0b01001 => Arm64Mnemonic.CMLE,
                 0b01010 => Arm64Mnemonic.FCMGT,
-                0b01011 => Arm64Mnemonic.FCMGE,
+                // opcode=01011 是整数 NEG；浮点零比较使用独立的 0110x 编码。
+                0b01011 when size != 3 || q => Arm64Mnemonic.NEG,
                 0b01111 when size == 0b10 => Arm64Mnemonic.FNEG,
                 0b10010 => Arm64Mnemonic.SQXTUN,
                 0b10100 => Arm64Mnemonic.UQXTN,
@@ -948,10 +1132,65 @@ internal static class Arm64NonScalarAdvancedSimd
 
     private static Arm64Instruction AdvancedSimdAcrossLanes(uint instruction)
     {
+        var q = instruction.TestBit(30);
+        var u = instruction.TestBit(29);
+        var size = (int)((instruction >> 22) & 3);
+        var opcode = (instruction >> 12) & 31;
+        Arm64Mnemonic mnemonic;
+        Arm64Register scalarBase;
+        Arm64ArrangementSpecifier source;
+
+        if (opcode is 0b01100 or 0b01111)
+        {
+            // 浮点归约的 U 区分 H/S，size<1> 区分 min/max；不是普通整数 size 编码。
+            if ((size & 1) != 0 || (u && !q))
+                throw new Arm64UndefinedInstructionException("Advanced SIMD FP reduction: reserved size/Q");
+            mnemonic = (opcode, size) switch
+            {
+                (0b01100, 0) => Arm64Mnemonic.FMAXNMV,
+                (0b01100, 2) => Arm64Mnemonic.FMINNMV,
+                (0b01111, 0) => Arm64Mnemonic.FMAXV,
+                _ => Arm64Mnemonic.FMINV
+            };
+            scalarBase = u ? Arm64Register.S0 : Arm64Register.H0;
+            source = VectorArrangement(u ? 2 : 1, q);
+        }
+        else
+        {
+            // 整数归约需要至少四个 lane，S 只允许 4S，D 没有 across-lanes 编码。
+            if (size == 3 || (size == 2 && !q))
+                throw new Arm64UndefinedInstructionException("Advanced SIMD integer reduction: reserved size/Q");
+            mnemonic = (u, opcode) switch
+            {
+                (false, 0b11011) => Arm64Mnemonic.ADDV,
+                (false, 0b01010) => Arm64Mnemonic.SMAXV,
+                (true, 0b01010) => Arm64Mnemonic.UMAXV,
+                (false, 0b11010) => Arm64Mnemonic.SMINV,
+                (true, 0b11010) => Arm64Mnemonic.UMINV,
+                (false, 0b00011) => Arm64Mnemonic.SADDLV,
+                (true, 0b00011) => Arm64Mnemonic.UADDLV,
+                _ => throw new Arm64UndefinedInstructionException($"Advanced SIMD reduction: unallocated U={u}, opcode={opcode}")
+            };
+            source = VectorArrangement(size, q);
+            var resultSize = opcode == 0b00011 ? size + 1 : size;
+            scalarBase = resultSize switch
+            {
+                0 => Arm64Register.B0,
+                1 => Arm64Register.H0,
+                2 => Arm64Register.S0,
+                _ => Arm64Register.D0
+            };
+        }
+
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
+            Mnemonic = mnemonic,
             MnemonicCategory = Arm64MnemonicCategory.SimdVectorMath, 
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = scalarBase + (int)(instruction & 31),
+            Op1Kind = Arm64OperandKind.Register,
+            Op1Reg = Arm64Register.V0 + (int)((instruction >> 5) & 31),
+            Op1Arrangement = source
         };
     }
 

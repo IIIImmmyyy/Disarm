@@ -4,10 +4,19 @@ internal static class Arm64System
 {
     public static Arm64Instruction WithResult(uint instruction)
     {
+        // 此主编码组是 TME 结果指令，不是另一个 SYSL；只接受 TSTART/TTEST 的固定域。
+        var mnemonic = (instruction & 0xFFFFFFE0) switch
+        {
+            0xD5233060 => Arm64Mnemonic.TSTART,
+            0xD5233160 => Arm64Mnemonic.TTEST,
+            _ => throw new Arm64UndefinedInstructionException("System with result: unallocated TME encoding")
+        };
         return new()
         {
-            Mnemonic = Arm64Mnemonic.UNIMPLEMENTED,
-            MnemonicCategory = Arm64MnemonicCategory.System, 
+            Mnemonic = mnemonic,
+            MnemonicCategory = Arm64MnemonicCategory.System,
+            Op0Kind = Arm64OperandKind.Register,
+            Op0Reg = Arm64Register.X0 + (int)(instruction & 31)
         };
     }
 

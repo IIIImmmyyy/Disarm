@@ -189,7 +189,13 @@ public struct Arm64Instruction
         sb.Append("0x");
         sb.Append(Address.ToString("X8"));
         sb.Append(' ');
-        sb.Append(Mnemonic);
+        // 命名 HINT 别名的 CSYNC 是固定关键字，不是 enum 名称中的下划线。
+        sb.Append(Mnemonic switch
+        {
+            Arm64Mnemonic.PSB_CSYNC => "PSB CSYNC",
+            Arm64Mnemonic.TSB_CSYNC => "TSB CSYNC",
+            _ => Mnemonic.ToString()
+        });
 
         if (MnemonicConditionCode != Arm64ConditionCode.NONE)
             sb.Append('.').Append(MnemonicConditionCode);
@@ -211,20 +217,26 @@ public struct Arm64Instruction
                 sb.Append(", ").Append(FinalOpShiftType).Append(" #0x").Append(Op2Imm.ToString("X"));
             return sb.ToString();
         }
-        if (Mnemonic == Arm64Mnemonic.CMN)
+        if (Mnemonic is Arm64Mnemonic.CMN or Arm64Mnemonic.CMP)
         {
-            // CMN 的 Op2 保存源寄存器的移位量，须随修饰符显示，不能误打印为第三个源。
+            // CMN 将移位量前移到 Op2；CMP 消费者仍读取原 SUBS 的 Op3，显示时不能因 Op2 空洞丢量。
+            // 只选择现有槽位，不更改 flags 消费者使用的别名布局。
+            var modifierKind = Mnemonic == Arm64Mnemonic.CMP ? Op3Kind : Op2Kind;
+            var modifierAmount = Mnemonic == Arm64Mnemonic.CMP ? Op3Imm : Op2Imm;
             if (FinalOpExtendType != Arm64ExtendType.NONE)
                 sb.Append(", ").Append(FinalOpExtendType);
             else if (FinalOpShiftType != Arm64ShiftType.NONE)
                 sb.Append(", ").Append(FinalOpShiftType);
-            if (Op2Kind == Arm64OperandKind.Immediate && Op2Imm != 0)
-                sb.Append(" #0x").Append(Op2Imm.ToString("X"));
+            if (modifierKind == Arm64OperandKind.Immediate && modifierAmount != 0)
+                sb.Append(" #0x").Append(modifierAmount.ToString("X"));
             return sb.ToString();
         }
         if (!AppendOperand(sb, 2, Op2Kind, Op2Reg, Op2VectorElement, Op2Arrangement, Op2ShiftType, Op2Imm, Op2FpImm, true, MemExtendOrShiftAmount))
             goto doneops;
         if (!AppendOperand(sb, 3, Op3Kind, Op3Reg, Op3VectorElement, Op3Arrangement, Op3ShiftType, Op3Imm, Op3FpImm, true, MemExtendOrShiftAmount))
+            goto doneops;
+        // CASP 展开两对寄存器后，地址位于第五操作数；显示层必须消费完整的既有模型。
+        if (!AppendOperand(sb, 4, Op4Kind, Op4Reg, Op4VectorElement, Op4Arrangement, Op4ShiftType, Op4Imm, Op4FpImm, true, MemExtendOrShiftAmount))
             goto doneops;
         
         doneops:
@@ -260,7 +272,13 @@ public struct Arm64Instruction
         }
         else if (kind == Arm64OperandKind.Immediate)
         {
-            if (IsSystemRegisterOperand(operandIndex) &&
+            // BTI 的立即数槽保存 target 编码，汇编语法消费为 c/j/jc，不能打印成 #imm。
+            if (Mnemonic == Arm64Mnemonic.BTI && operandIndex == 0)
+            {
+                sb.Append(imm switch { 1 => "c", 2 => "j", 3 => "jc",
+                    _ => throw new InvalidOperationException("Invalid decoded BTI target") });
+            }
+            else if (IsSystemRegisterOperand(operandIndex) &&
                 Arm64SystemRegisterNameResolver.TryResolve(imm, Mnemonic, out var systemRegisterName))
             {
                 sb.Append(systemRegisterName);

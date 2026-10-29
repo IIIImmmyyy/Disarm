@@ -740,4 +740,10 @@ public enum Arm64Mnemonic
     BSL,
     BIT,
     BIF,
+    // 追加而非插入，保留已有 mnemonic 的数值身份。
+    ADDV,
+    RSHRN,
+    RSHRN2,
+    TSTART,
+    TTEST,
 }
