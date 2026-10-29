@@ -755,15 +755,15 @@ internal static class Arm64NonScalarAdvancedSimd
         var rn = (int)(instruction >> 5) & 0b11111;
         var rd = (int)instruction & 0b11111;
 
-        // Determine mnemonic based on opcode
+        // opcode 的高位区分第一/第二组；低两位分别是 unzip、transpose、zip，不能错配 lane 顺序。
         Arm64Mnemonic mnemonic = opcode switch
         {
             0b001 => Arm64Mnemonic.UZP1,
-            0b101 => Arm64Mnemonic.TRN1,
+            0b010 => Arm64Mnemonic.TRN1,
             0b011 => Arm64Mnemonic.ZIP1,
-            0b000 => Arm64Mnemonic.UZP2,
-            0b100 => Arm64Mnemonic.TRN2,
-            0b010 => Arm64Mnemonic.ZIP2,
+            0b101 => Arm64Mnemonic.UZP2,
+            0b110 => Arm64Mnemonic.TRN2,
+            0b111 => Arm64Mnemonic.ZIP2,
             _ => throw new Arm64UndefinedInstructionException($"AdvancedSimdPermute: Invalid opcode 0x{opcode:X}")
         };
 
@@ -800,7 +800,8 @@ internal static class Arm64NonScalarAdvancedSimd
     private static Arm64Instruction AdvancedSimdExtract(uint instruction)
     {
         var q = instruction.TestBit(30); // Bit 30 - 0 for 64-bit, 1 for 128-bit
-        var rm = (int)(instruction >> 16) & 0b1111; // Bits 16-19
+        // Rm 是 bits20:16 的完整五位；截成四位会把 V16..V31 错读为 V0..V15。
+        var rm = (int)(instruction >> 16) & 0b11111;
         var imm4 = (instruction >> 11) & 0b1111;   // Bits 11-14 - extraction index
         var rn = (int)(instruction >> 5) & 0b11111; // Bits 5-9
         var rd = (int)instruction & 0b11111;       // Bits 0-4
@@ -1003,6 +1004,64 @@ internal static class Arm64NonScalarAdvancedSimd
         var rn = (int)((instruction >> 5) & 0b1_1111);
         var rd = (int)(instruction & 0b1_1111);
 
+        // 普通 S/D 浮点子族把 size 高位作为操作位 S、低位作为精度 sz。
+        // 必须先按 U:S:opcode 选运算，再构造 2S/4S/2D，不能复用整数 B/H/S/D 的 size 表。
+        var s = size.TestBit(1);
+        var floatingMnemonic = (u, s, opcode) switch
+        {
+            (false, true, 0b01110) => Arm64Mnemonic.FCMLT,
+            (false, true, 0b01111) => Arm64Mnemonic.FABS,
+            (true, true, 0b01111) => Arm64Mnemonic.FNEG,
+            (false, false, 0b11000) => Arm64Mnemonic.FRINTN,
+            (false, true, 0b11000) => Arm64Mnemonic.FRINTP,
+            (true, false, 0b11000) => Arm64Mnemonic.FRINTA,
+            (false, false, 0b11001) => Arm64Mnemonic.FRINTM,
+            (false, true, 0b11001) => Arm64Mnemonic.FRINTZ,
+            (true, false, 0b11001) => Arm64Mnemonic.FRINTX,
+            (true, true, 0b11001) => Arm64Mnemonic.FRINTI,
+            (false, false, 0b11010) => Arm64Mnemonic.FCVTNS,
+            (false, true, 0b11010) => Arm64Mnemonic.FCVTPS,
+            (true, false, 0b11010) => Arm64Mnemonic.FCVTNU,
+            (true, true, 0b11010) => Arm64Mnemonic.FCVTPU,
+            (false, false, 0b11011) => Arm64Mnemonic.FCVTMS,
+            (false, true, 0b11011) => Arm64Mnemonic.FCVTZS,
+            (true, false, 0b11011) => Arm64Mnemonic.FCVTMU,
+            (true, true, 0b11011) => Arm64Mnemonic.FCVTZU,
+            (false, false, 0b11100) => Arm64Mnemonic.FCVTAS,
+            (true, false, 0b11100) => Arm64Mnemonic.FCVTAU,
+            (false, true, 0b11100) => Arm64Mnemonic.URECPE,
+            (true, true, 0b11100) => Arm64Mnemonic.URSQRTE,
+            (false, false, 0b11101) => Arm64Mnemonic.SCVTF,
+            (true, false, 0b11101) => Arm64Mnemonic.UCVTF,
+            (false, true, 0b11101) => Arm64Mnemonic.FRECPE,
+            (true, true, 0b11101) => Arm64Mnemonic.FRSQRTE,
+            (false, false, 0b11111) => Arm64Mnemonic.FRINT64Z,
+            (true, false, 0b11111) => Arm64Mnemonic.FRINT64X,
+            (true, true, 0b11111) => Arm64Mnemonic.FSQRT,
+            _ => Arm64Mnemonic.INVALID
+        };
+        if (floatingMnemonic != Arm64Mnemonic.INVALID)
+        {
+            // 整数 reciprocal estimate 共享此编码区，但架构仅分配 S lane，不允许 D。
+            if (floatingMnemonic is Arm64Mnemonic.URECPE or Arm64Mnemonic.URSQRTE && size.TestBit(0))
+                throw new Arm64UndefinedInstructionException("Integer reciprocal estimate: D elements are unallocated");
+            var floatingArrangement = VectorArrangement(2 + (int)(size & 1), q);
+            return new()
+            {
+                Mnemonic = floatingMnemonic,
+                MnemonicCategory = floatingMnemonic == Arm64Mnemonic.FCMLT
+                    ? Arm64MnemonicCategory.SimdComparison : Arm64MnemonicCategory.SimdVectorMath,
+                Op0Kind = Arm64OperandKind.Register,
+                Op0Reg = Arm64Register.V0 + rd,
+                Op0Arrangement = floatingArrangement,
+                Op1Kind = Arm64OperandKind.Register,
+                Op1Reg = Arm64Register.V0 + rn,
+                Op1Arrangement = floatingArrangement,
+                Op2Kind = floatingMnemonic == Arm64Mnemonic.FCMLT ? Arm64OperandKind.FloatingPointImmediate : Arm64OperandKind.None,
+                Op2FpImm = 0
+            };
+        }
+
         Arm64Mnemonic mnemonic;
         
         if (u)
@@ -1021,17 +1080,9 @@ internal static class Arm64NonScalarAdvancedSimd
                 0b01010 => Arm64Mnemonic.FCMGT,
                 // opcode=01011 是整数 NEG；浮点零比较使用独立的 0110x 编码。
                 0b01011 when size != 3 || q => Arm64Mnemonic.NEG,
-                0b01111 when size == 0b10 => Arm64Mnemonic.FNEG,
                 0b10010 => Arm64Mnemonic.SQXTUN,
                 0b10100 => Arm64Mnemonic.UQXTN,
                 0b10110 when size != 0b11 => Arm64Mnemonic.FCVTXN,
-                0b11000 when size != 0b11 => Arm64Mnemonic.FRINTA,
-                0b11001 when size != 0b11 => Arm64Mnemonic.FRINTX,
-                0b11010 when size != 0b11 => Arm64Mnemonic.FCVTNU,
-                0b11011 => size >= 2 ? Arm64Mnemonic.FCVTZU : Arm64Mnemonic.FCVTMU,
-                0b11100 when size != 0b11 => Arm64Mnemonic.FCVTAU,
-                0b11101 when size != 0b11 => Arm64Mnemonic.UCVTF,
-                0b11111 when size != 0b11 => Arm64Mnemonic.FRSQRTE,
                 _ => throw new Arm64UndefinedInstructionException($"AdvancedSimdTwoRegisterMisc: U=1, opcode=0x{opcode:X}, size=0x{size:X}")
             };
         }
@@ -1052,56 +1103,26 @@ internal static class Arm64NonScalarAdvancedSimd
                 0b01001 => Arm64Mnemonic.CMEQ,
                 0b01010 => Arm64Mnemonic.CMLT,
                 0b01011 => Arm64Mnemonic.ABS,
-                0b01110 when size >= 2 => Arm64Mnemonic.FCMLT,
-                // 向量 FABS 的单/双精度形式为 2S、4S、2D；size=11、Q=0 是未分配编码。
-                0b01111 when size == 0b10 || (size == 0b11 && q) => Arm64Mnemonic.FABS,
                 0b10010 when size != 3 => q ? Arm64Mnemonic.XTN2 : Arm64Mnemonic.XTN,
                 0b10100 => Arm64Mnemonic.SQXTN,
                 0b10110 when size != 0b11 => Arm64Mnemonic.FCVTN,
                 0b10111 when size != 0b11 => Arm64Mnemonic.FCVTL,
-                0b11000 when size != 0b11 => Arm64Mnemonic.FRINTN,
-                0b11001 when size != 0b11 => Arm64Mnemonic.FRINTM,
-                0b11010 when size != 0b11 => Arm64Mnemonic.FCVTNS,
-                0b11011 => size >= 2 ? Arm64Mnemonic.FCVTZS : Arm64Mnemonic.FCVTMS,
-                0b11100 when size != 0b11 => Arm64Mnemonic.FCVTAS,
-                0b11101 when size != 0b11 => Arm64Mnemonic.SCVTF,
-                0b11111 when size != 0b11 => Arm64Mnemonic.FRECPE,
                 _ => throw new Arm64UndefinedInstructionException($"AdvancedSimdTwoRegisterMisc: U=0, opcode=0x{opcode:X}, size=0x{size:X}")
             };
         }
 
-        // Integer-to-floating-point conversions encode the floating-point element
-        // size differently from the generic integer two-register operations in
-        // this group. Decode their complete architectural vector shapes here.
-        Arm64ArrangementSpecifier arrangement;
-        if (mnemonic is Arm64Mnemonic.SCVTF or Arm64Mnemonic.UCVTF or
-            Arm64Mnemonic.FCVTZS or Arm64Mnemonic.FCVTZU or Arm64Mnemonic.FCMLT)
+        var arrangement = size switch
         {
-            var floatSize = mnemonic is Arm64Mnemonic.SCVTF or Arm64Mnemonic.UCVTF ? size : size & 1;
-            arrangement = (floatSize, q) switch
-            {
-                (0b00, false) => Arm64ArrangementSpecifier.TwoS,
-                (0b00, true) => Arm64ArrangementSpecifier.FourS,
-                (0b01, true) => Arm64ArrangementSpecifier.TwoD,
-                _ => throw new Arm64UndefinedInstructionException(
-                    $"AdvancedSimdTwoRegisterMisc: {mnemonic} has invalid size=0x{size:X}, Q={(q ? 1 : 0)}")
-            };
-        }
-        else
-        {
-            arrangement = size switch
-            {
-                0b00 when q => Arm64ArrangementSpecifier.SixteenB,
-                0b00 => Arm64ArrangementSpecifier.EightB,
-                0b01 when q => Arm64ArrangementSpecifier.EightH,
-                0b01 => Arm64ArrangementSpecifier.FourH,
-                0b10 when q => Arm64ArrangementSpecifier.FourS,
-                0b10 => Arm64ArrangementSpecifier.TwoS,
-                0b11 when q => Arm64ArrangementSpecifier.TwoD,
-                0b11 => Arm64ArrangementSpecifier.None, // Scalar D register
-                _ => throw new("Impossible size")
-            };
-        }
+            0b00 when q => Arm64ArrangementSpecifier.SixteenB,
+            0b00 => Arm64ArrangementSpecifier.EightB,
+            0b01 when q => Arm64ArrangementSpecifier.EightH,
+            0b01 => Arm64ArrangementSpecifier.FourH,
+            0b10 when q => Arm64ArrangementSpecifier.FourS,
+            0b10 => Arm64ArrangementSpecifier.TwoS,
+            0b11 when q => Arm64ArrangementSpecifier.TwoD,
+            0b11 => Arm64ArrangementSpecifier.None, // Scalar D register
+            _ => throw new("Impossible size")
+        };
 
         var category = mnemonic switch
         {
@@ -1124,8 +1145,7 @@ internal static class Arm64NonScalarAdvancedSimd
                 ? size switch { 0 => Arm64ArrangementSpecifier.EightH,
                     1 => Arm64ArrangementSpecifier.FourS, _ => Arm64ArrangementSpecifier.TwoD }
                 : arrangement,
-            Op2Kind = mnemonic == Arm64Mnemonic.FCMLT ? Arm64OperandKind.FloatingPointImmediate : Arm64OperandKind.None,
-            Op2FpImm = 0,
+            Op2Kind = Arm64OperandKind.None,
             MnemonicCategory = category,
         };
     }

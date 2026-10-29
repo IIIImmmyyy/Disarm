@@ -48,7 +48,7 @@
 
 ## 追加核查：现有解码/别名中确认的问题
 
-以下问题已用真实编码复现，且区分了启用/关闭别名的结果。表中保留首次复现结果；ORR/SXT 和 CMP 显示已经按后续批准的别名范围修复，见下方追加验证记录。其余解码问题仍未修改。
+以下问题已用真实编码复现，且区分了启用/关闭别名的结果。表中保留首次复现结果；ORR/SXT 和 CMP 显示，以及其余五类已确认解码错误现均已修复，见下方两节追加验证记录。
 
 | 编码 | 正确指令 | 首次核查结果 | 原因与归属 |
 | --- | --- | --- | --- |
@@ -69,7 +69,7 @@
 
 专项检查中的全部 15,360 个合法 bitfield 编码并不都输出首选别名。例如 UBFM/SBFM 和某些 UBFIZ/UBFX 的文本差异可以语义等价，未把这些差异一概当成误解码；CINV/CSETM 未别名化也不是运算错误。上述表只列已确认的操作、寄存器、位宽、合法性错误或单独标注的显示问题。
 
-ORR/SXT 的别名前提已校正。剩余问题建议按 owner 修复普通 S/D misc 与 permute/EXT 表，以及 signed-load 的目标寄存器分支和 W 移位非法编码检查，继续沿现有解码模型修正，不在 SSA/CodeGen 中兜底。
+上述问题均在各自原 decoder/alias owner 内修复，沿用现有操作数模型，没有在 SSA/CodeGen 中兜底。前文明确保留的 UNIMPLEMENTED 指令族仍按原边界处理。
 
 ## 验证结果
 
@@ -100,3 +100,32 @@ dotnet test .\Disarm\Disarm.Tests\Disarm.Tests.csproj --no-restore --verbosity m
 直接解码测试新增 6 个契约用例：修复前 5 失败、1 个控制项通过，修复后 Disarm 全部 90/90 通过。对原有 21,030 编码专项语料复核，44 个此前被拒绝的合法 signed bitfield 编码均恢复。对全部 5,120 个合法有符号 bitfield 编码做 30,720 次位向量结果比较，对 ORR 零源/同源/移位形态做 1,280 次结果比较，零差异。
 
 构建使用上节同一命令，结果 0 warning、0 error。完整 structured regression 重新运行后 451/451 通过，290 个 class 全部成功，零失败；未更新快照或断言。诊断文件位于 `%TEMP%\UREngine\alias-fix-20261029`：`before.log`、`disarm-tests.log`、`build.log`、`alias-validation.json` 和 `full-regression.log`；`validate_aliases.py` 保存独立的位向量检查程序。
+
+## 已确认解码错误修复追加验证（2026-10-29）
+
+在别名修复后的 Disarm 基线 `ec55716` 上修复其余五组问题：
+
+- `AdvancedSimdPermute` 修正完整六项 opcode 表；000/100 仍是未分配编码。
+- `AdvancedSimdExtract` 从 bits20:16 读取完整五位 Rm，V16–V31 不再截断。
+- `AdvancedSimdTwoRegisterMisc` 按 U:S:opcode 精确选择已支持的普通浮点操作，再按 sz/Q 构造 2S/4S/2D。FSQRT、FRECPE/FRSQRTE、FRINT 各模式、整数/浮点转换不再错配；同根误映射的 URECPE/URSQRTE 和 FRINT64Z/X 使用现有枚举正确解码。URECPE/URSQRTE 仅允许 S lane，Q=0 的 D 形式保持拒绝。移除旧浮点分支和已不可达的末尾 FCMLT 消费；整数子族和原本未支持的额外零比较等不扩展。
+- LDRSB/LDURSB 的 unsigned immediate、unscaled、pre/post-index 和 register-offset 四条既有路径统一补齐目标分支：opc=10 扩展到 X，opc=11 扩展到 W。四种形态均已用真实编码复现原异常，地址、偏移、扩展及 writeback 计算不改。
+- `AddSubtractShiftedRegister` 在 sf=0 时拒绝 imm6<5>=1，W 的 31 位和 X 的 32/63 位合法移位保留。
+
+实现只修改以上三个 decoder 源文件。新增 `DecoderCorrectionTests` 中 13 个用例：前 12 个修复前全部失败；另外一个寻址契约用例的原始四个机器码先经独立解码确认 INVALID，再固定 writeback、地址寄存器和 W/X 目标。生成 C# 快照无法直接观察这些内部编码契约，因此使用直接解码测试。
+
+独立验证使用 LLVM 20.1.8 编码表和 Capstone 5.0.7，与生产实现分开生成期望值：
+
+| 范围 | 合法编码，完整操作数一致 | 非法编码，正确拒绝 |
+| --- | ---: | ---: |
+| 普通 S/D misc | 85 | 59 |
+| UZP/TRN/ZIP | 126 | 66 |
+| EXT lane/高编号寄存器 | 24 | 8 |
+| W/X ADD/ADDS/SUB/SUBS 移位 | 96 | 64 |
+| signed-byte load 各寻址模式 | 24 | 0 |
+| 总计 | 355 | 197 |
+
+552 个编码零差异。原有 21,030 编码语料中，这五组已记录的错误均消除；未把其他等价别名、显示约定或明确保留的 PRFM/PRFUM 等未实现项算作本轮通过结果。
+
+构建与完整回归沿用上节命令：构建 0 error（现有项目报告 234 warning），Disarm 单测 103/103 通过；完整 structured regression 451/451 通过，290 个 class 全部成功，零失败。未修改回归断言或 approved snapshot。
+
+本轮主验证目录为 `%TEMP%\UREngine\decoder-fixes-20261029`，含 `make_corpus.py`、`corpus.json`、`words.json`、`before.json`、`after.json`、`after-comparison.json`、`disarm-tests.log`、`build.log` 和 `full-regression.log`。针对性测试的前后日志位于 `%TEMP%\UREngine\confirmed-decoder-20261029\agent\before.log`、`after.log`。

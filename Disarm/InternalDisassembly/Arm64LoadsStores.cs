@@ -534,8 +534,9 @@ internal static class Arm64LoadsStores
             Arm64Mnemonic.STRB or Arm64Mnemonic.LDRB or Arm64Mnemonic.STRH or Arm64Mnemonic.LDRH => Arm64Register.W0,
             Arm64Mnemonic.STR or Arm64Mnemonic.LDR when size is 0b10 => Arm64Register.W0,
             Arm64Mnemonic.STR or Arm64Mnemonic.LDR => Arm64Register.X0,
-            Arm64Mnemonic.LDRSH when opc is 0b10 => Arm64Register.X0,
-            Arm64Mnemonic.LDRSH => Arm64Register.W0,
+            // signed B/H 的访问宽度不决定目标宽度；opc=10 扩展到 X，opc=11 扩展到 W。
+            Arm64Mnemonic.LDRSB or Arm64Mnemonic.LDRSH when opc is 0b10 => Arm64Register.X0,
+            Arm64Mnemonic.LDRSB or Arm64Mnemonic.LDRSH => Arm64Register.W0,
             Arm64Mnemonic.LDRSW => Arm64Register.X0,
             _ => throw new("Impossible mnemonic")
         };
@@ -860,8 +861,9 @@ internal static class Arm64LoadsStores
             Arm64Mnemonic.STRB or Arm64Mnemonic.LDRB or Arm64Mnemonic.STRH or Arm64Mnemonic.LDRH => Arm64Register.W0,
             Arm64Mnemonic.STR or Arm64Mnemonic.LDR when size is 0b10 => Arm64Register.W0,
             Arm64Mnemonic.STR or Arm64Mnemonic.LDR => Arm64Register.X0,
-            Arm64Mnemonic.LDRSH when opc is 0b10 => Arm64Register.X0,
-            Arm64Mnemonic.LDRSH => Arm64Register.W0,
+            // signed B/H 的访问宽度不决定目标宽度；opc=10 扩展到 X，opc=11 扩展到 W。
+            Arm64Mnemonic.LDRSB or Arm64Mnemonic.LDRSH when opc is 0b10 => Arm64Register.X0,
+            Arm64Mnemonic.LDRSB or Arm64Mnemonic.LDRSH => Arm64Register.W0,
             Arm64Mnemonic.LDRSW => Arm64Register.X0,
             _ => throw new("Impossible mnemonic")
         };
@@ -994,8 +996,9 @@ internal static class Arm64LoadsStores
             Arm64Mnemonic.STRB or Arm64Mnemonic.LDRB or Arm64Mnemonic.STRH or Arm64Mnemonic.LDRH => Arm64Register.W0,
             Arm64Mnemonic.STR or Arm64Mnemonic.LDR when size is 0b10 => Arm64Register.W0,
             Arm64Mnemonic.STR or Arm64Mnemonic.LDR => Arm64Register.X0,
-            Arm64Mnemonic.LDRSH when opc is 0b10 => Arm64Register.X0,
-            Arm64Mnemonic.LDRSH => Arm64Register.W0,
+            // signed B/H 的访问宽度不决定目标宽度；opc=10 扩展到 X，opc=11 扩展到 W。
+            Arm64Mnemonic.LDRSB or Arm64Mnemonic.LDRSH when opc is 0b10 => Arm64Register.X0,
+            Arm64Mnemonic.LDRSB or Arm64Mnemonic.LDRSH => Arm64Register.W0,
             Arm64Mnemonic.LDRSW => Arm64Register.X0,
             _ => throw new("Impossible mnemonic")
         };
@@ -1135,8 +1138,9 @@ internal static class Arm64LoadsStores
             Arm64Mnemonic.STURB or Arm64Mnemonic.LDURB or Arm64Mnemonic.STURH or Arm64Mnemonic.LDURH => Arm64Register.W0,
             Arm64Mnemonic.STUR or Arm64Mnemonic.LDUR when size is 0b10 => Arm64Register.W0,
             Arm64Mnemonic.STUR or Arm64Mnemonic.LDUR => Arm64Register.X0,
-            Arm64Mnemonic.LDURSH when opc is 0b10 => Arm64Register.X0,
-            Arm64Mnemonic.LDURSH => Arm64Register.W0,
+            // 未缩放 signed-byte 与 signed-half 共用 opc 的 W/X 扩展规则，偏移计算保持原路径。
+            Arm64Mnemonic.LDURSB or Arm64Mnemonic.LDURSH when opc is 0b10 => Arm64Register.X0,
+            Arm64Mnemonic.LDURSB or Arm64Mnemonic.LDURSH => Arm64Register.W0,
             Arm64Mnemonic.LDURSW => Arm64Register.X0,
             _ => throw new("Impossible mnemonic")
         };

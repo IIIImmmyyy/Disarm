@@ -304,6 +304,9 @@ internal static class Arm64DataProcessingRegister
 
         if (shift == Arm64ShiftType.ROR)
             throw new Arm64UndefinedInstructionException("Add/Subtract Shifted Register: Shift type ROR is reserved");
+        // W 运算的 imm6 只能表示 0..31；高位不是可截断的移位量，而是架构未分配编码。
+        if (!is64Bit && shiftAmount.TestBit(5))
+            throw new Arm64UndefinedInstructionException("Add/Subtract Shifted Register: imm6 bit 5 set and sf = 0");
 
         return new()
         {
